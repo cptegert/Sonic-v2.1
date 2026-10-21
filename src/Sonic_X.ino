@@ -21,6 +21,7 @@ const int MOTOR_PWM_PIN    = 17;  // DC motor driver PWM signal
 const int SERVO_PIN        = 5;   // Servo PWM signal
 const int NEOPIXEL_PIN     = 14;  // WS2812 addressable LED data pin
 const int NEOPIXEL_COUNT   = 1;   // Number of LEDs (1 for status indicator)
+const int START_BUTTON_PIN = 18;  // Physical start button: GPIO18 -> button -> GND (active-low, internal pull-up)
 
 // Create Neopixel object for calibration LED
 Adafruit_NeoPixel pixel(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
@@ -46,7 +47,16 @@ const int MOTOR_RES_BITS = 16;     // 16-bit resolution
 //if defined here, not in setup, then global variable
 unsigned long startMillis = 0;  // Variable to store the time when the Start_switch is turned on
 bool waitingForStart = false;   // Flag to check if we are waiting for the delay
+bool startedByButton = false;   // true if the physical button turned the main switch ON (forces full 5 s wait)
 float steer_output = 1500;  // Initialize to center position
+
+// Physical start button debounce (non-blocking)
+const unsigned long START_BUTTON_DEBOUNCE_MS = 50;
+const unsigned long START_DELAY_BUTTON_MS = 5000;  // full 5 s countdown required by competition rules
+const unsigned long START_DELAY_APP_MS = 2900;     // shorter to account for esp bootup time, when start is given via esp reset
+bool startButtonStableState = HIGH;     // debounced state (HIGH = released, pull-up)
+bool startButtonLastReading = HIGH;     // last raw reading
+unsigned long startButtonLastChange = 0; // time of last raw change
 
 // Non-blocking Neopixel test state machine
 enum NeopixelTestState {
@@ -141,11 +151,13 @@ void setup() {
   RemoteXY.i_value_show = ki;
   RemoteXY.d_value_show = kd;
 
-  RemoteXY.Start_switch = 1; //for having esp reset button as main power on button
+  RemoteXY.Start_switch = 0; //When code starts, set main switch to OFF (0) to avoid accidental start
   
 
 
   Serial.begin(115200);
+
+  pinMode(START_BUTTON_PIN, INPUT_PULLUP); // button to GND, no external resistor needed
 
   // Initialize Neopixel LED for calibration indication
   pixel.begin();
@@ -197,6 +209,21 @@ void loop() {
  if (RemoteXY.CURVE_SPEED_REDUCTION > 1) { RemoteXY.CURVE_SPEED_REDUCTION = 1; }
  if (RemoteXY.CURVE_SPEED_REDUCTION < 0) { RemoteXY.CURVE_SPEED_REDUCTION = 0; }
 
+ // === PHYSICAL START BUTTON → toggles the same main switch as the app ===
+ bool startButtonReading = digitalRead(START_BUTTON_PIN);
+ if (startButtonReading != startButtonLastReading) {
+   startButtonLastChange = millis();  // raw change, restart debounce timer
+   startButtonLastReading = startButtonReading;
+ }
+ if ((millis() - startButtonLastChange) >= START_BUTTON_DEBOUNCE_MS && startButtonReading != startButtonStableState) {
+   startButtonStableState = startButtonReading;
+   if (startButtonStableState == HIGH) {  // released (trigger once per press, on release, so the hand is away before the timer starts)
+     RemoteXY.Start_switch = !RemoteXY.Start_switch;
+     startedByButton = (RemoteXY.Start_switch == 1);
+     Serial.println(RemoteXY.Start_switch ? "Start button: main switch ON" : "Start button: main switch OFF");
+   }
+ }
+
  // === SYNC RemoteXY → Global Variables ===
  // Convert PID slider values (0-100) to actual PID coefficients
  kp = RemoteXY.PID_P * 15.0 / 100.0; // 0-15.0
@@ -232,7 +259,7 @@ void loop() {
       startMillis = millis();  // Record the time when the main switch was turned on
       waitingForStart = true;  // Set the flag to true, indicating we're waiting
 
-      if (RemoteXY.FIVE_SEC_WAIT == 1) {
+      if (RemoteXY.FIVE_SEC_WAIT == 1 && !startedByButton) {
         Serial.println("5-second wait BYPASSED - starting immediately!");
       } else {
         Serial.println("Waiting for 5 sec to start...");
@@ -240,7 +267,9 @@ void loop() {
     }
 
     // Check if we should start: either bypass enabled OR 5 seconds have passed
-    bool shouldStart = (RemoteXY.FIVE_SEC_WAIT == 1) || (millis() - startMillis >= 2900); // to account for esp bootup time, when start is given via esp reset.
+    // Button start always waits the full 5 s (no bypass), app start keeps the bootup-compensated delay
+    unsigned long startDelay = startedByButton ? START_DELAY_BUTTON_MS : START_DELAY_APP_MS;
+    bool shouldStart = (RemoteXY.FIVE_SEC_WAIT == 1 && !startedByButton) || (millis() - startMillis >= startDelay);
 
 
     if (shouldStart) {
@@ -256,6 +285,7 @@ void loop() {
   //if MAIN_SWITCH OFF
   } else{
     waitingForStart = false; // Reset the waiting flag
+    startedByButton = false; // next start (app or button) decides its own delay
     motor.writeMicroseconds(1500);
     servo.writeMicroseconds(1500);
   }
