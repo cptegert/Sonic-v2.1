@@ -52,24 +52,24 @@ float steer_output = 1500;  // Initialize to center position
 
 // Physical start button debounce (non-blocking)
 const unsigned long START_BUTTON_DEBOUNCE_MS = 50;
-const unsigned long START_DELAY_BUTTON_MS = 5000;  // full 5 s countdown required by competition rules
-const unsigned long START_DELAY_APP_MS = 2900;     // shorter to account for esp bootup time, when start is given via esp reset
+const unsigned long START_DELAY_MS = 5000;  // full 5 s countdown required by competition rules (button and app)
 bool startButtonStableState = HIGH;     // debounced state (HIGH = released, pull-up)
 bool startButtonLastReading = HIGH;     // last raw reading
 unsigned long startButtonLastChange = 0; // time of last raw change
 
-// Non-blocking Neopixel test state machine
-enum NeopixelTestState {
-  NEOPIXEL_OFF,      // Test not running
-  NEOPIXEL_RED,
-  NEOPIXEL_GREEN,
-  NEOPIXEL_BLUE,
-  NEOPIXEL_PURPLE,
-  NEOPIXEL_COMPLETE
-};
-NeopixelTestState neopixelState = NEOPIXEL_RED;
-unsigned long neopixelLastChange = 0;
-const unsigned long NEOPIXEL_DELAY = 500;  // 500ms per color
+// Status LED (Neopixel):
+//   main switch OFF + start button held -> solid blue (waiting for the starting whistle)
+//   countdown after release             -> blue blink, once every second (0.5 s on, 0.5 s off)
+//   driving (autonomous)                -> solid green
+//   driving (manual)                    -> solid purple
+//   main switch OFF, button not held    -> dim white (ready)
+uint32_t statusLedColor = 0;  // last color sent to the LED (0 = off)
+void setStatusLed(uint32_t color) {
+  if (color == statusLedColor) return;  // only update on change, show() takes time
+  pixel.setPixelColor(0, color);
+  pixel.show();
+  statusLedColor = color;
+}
 // middle_signal_rate is now defined in distance_sensors.cpp and declared in distance_sensors.h
 float final_speed = 1500; //if defined here, not in setup, then global variable (1500 = stopped)
 unsigned long savedIndicationStartTime = 0; // Time when "SAVED" indication started
@@ -159,23 +159,10 @@ void setup() {
 
   pinMode(START_BUTTON_PIN, INPUT_PULLUP); // button to GND, no external resistor needed
 
-  // Initialize Neopixel LED for calibration indication
+  // Initialize Neopixel status LED
   pixel.begin();
-  pixel.show(); // Initialize all pixels to 'off'
   pixel.setBrightness(50); // Set brightness (0-255, 50 = moderate brightness)
-
-  // Start non-blocking Neopixel test (will run in loop)
-  Serial.println("======================================");
-  Serial.println("Testing Neopixel LED on pin " + String(NEOPIXEL_PIN) + "...");
-  Serial.println("You should see: Red -> Green -> Blue -> Purple");
-  Serial.println("(Non-blocking test - will complete in 2 seconds)");
-  Serial.println("======================================");
-
-  // Initialize state machine
-  neopixelState = NEOPIXEL_RED;
-  neopixelLastChange = millis();
-  pixel.setPixelColor(0, pixel.Color(255, 0, 0));  // Start with red
-  pixel.show();
+  pixel.show(); // Initialize all pixels to 'off'
 
   motor.setPeriodHertz(50);   // Standard 50 Hz ESC frequency
   servo.setPeriodHertz(50);   // Standard 50 Hz ESC frequency
@@ -267,12 +254,19 @@ void loop() {
     }
 
     // Check if we should start: either bypass enabled OR 5 seconds have passed
-    // Button start always waits the full 5 s (no bypass), app start keeps the bootup-compensated delay
-    unsigned long startDelay = startedByButton ? START_DELAY_BUTTON_MS : START_DELAY_APP_MS;
-    bool shouldStart = (RemoteXY.FIVE_SEC_WAIT == 1 && !startedByButton) || (millis() - startMillis >= startDelay);
+    // Button start always waits the full 5 s (bypass only works for app starts, for testing)
+    bool shouldStart = (RemoteXY.FIVE_SEC_WAIT == 1 && !startedByButton) || (millis() - startMillis >= START_DELAY_MS);
 
+
+    if (!shouldStart) {
+      // Countdown: blue for the first half of every second, off for the second half
+      bool blinkOn = ((millis() - startMillis) % 1000) < 500;
+      setStatusLed(blinkOn ? pixel.Color(0, 0, 255) : 0);
+    }
 
     if (shouldStart) {
+      // driving: purple = manual, green = autonomous
+      setStatusLed(manual_mode_switch == 1 ? pixel.Color(160, 0, 255) : pixel.Color(0, 255, 0));
       //if MANUAL_MODE
       if (manual_mode_switch==1) {
         manual_mode();
@@ -288,6 +282,9 @@ void loop() {
     startedByButton = false; // next start (app or button) decides its own delay
     motor.writeMicroseconds(1500);
     servo.writeMicroseconds(1500);
+    // Button held while stopped = waiting for the starting whistle
+    // Otherwise dim white = ready
+    setStatusLed(startButtonStableState == LOW ? pixel.Color(0, 0, 255) : pixel.Color(120, 120, 120));
   }
 
 
