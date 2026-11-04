@@ -105,6 +105,10 @@ def main():
           f"loop median {cyc[len(cyc) // 2]:.0f} ms, max {cyc[-1]:.0f} ms")
     for kp, ki, kd, sp in settings:
         print(f"settings: kp={kp:.2f} ki={ki:.3f} kd={kd:.2f} speed={sp:.0f}")
+    if "batt_v" in rows[0] and rows[0]["batt_v"] > 5:
+        b = [r["batt_v"] for r in rows]
+        print(f"battery: start {b[0]:.2f} V, end {b[-1]:.2f} V, lowest {min(b):.2f} V "
+              f"({min(b) / 3:.2f} V/cell)")
     if any(r["manual"] for r in rows):
         print("NOTE: run contains manual driving rows")
 

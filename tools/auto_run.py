@@ -147,18 +147,22 @@ class Link:
                     if not line.startswith("# robot got") and not line.startswith("# robot: viewer"):
                         print("   robot: " + line, flush=True)
 
-    def ask(self, cmd, expect, timeout=3.0):
-        """Send a command, wait for a reply line containing `expect`."""
+    def ask(self, cmd, expect, timeout=1.5, tries=3):
+        """Send a command, wait for a reply line containing `expect` (str or tuple).
+        UDP can drop packets, so the command is re-sent up to `tries` times.
+        Only use for commands that are safe to repeat (start answers "Already ON")."""
+        expects = (expect,) if isinstance(expect, str) else expect
         with self.lock:
             start = len(self.lines)
-        self.send(cmd)
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                for line in self.lines[start:]:
-                    if expect in line:
-                        return line
-            time.sleep(0.05)
+        for _ in range(tries):
+            self.send(cmd)
+            end = time.time() + timeout
+            while time.time() < end:
+                with self.lock:
+                    for line in self.lines[start:]:
+                        if any(e in line for e in expects):
+                            return line
+                time.sleep(0.05)
         return None
 
     def close(self):
@@ -186,7 +190,8 @@ def main():
     try:
         # --no-wifi-switch: don't switch back at the end, but still (re)join the
         # robot if the laptop drifted to another network (e.g. after a robot reboot)
-        if not a.no_wifi_switch or current_ssid() != ROBOT_SSID:
+        testing = "SONIC_IP" in os.environ  # fake robot on this laptop, no Wi-Fi needed
+        if not testing and (not a.no_wifi_switch or current_ssid() != ROBOT_SSID):
             say(f"switching Wi-Fi to {ROBOT_SSID} ...")
             ok, out = join_robot_wifi()
             if not ok:
@@ -197,7 +202,7 @@ def main():
         link = Link()
         params = None
         for _ in range(20):  # up to ~20 s for the link to come up
-            params = link.ask("params", "params:", timeout=1.0)
+            params = link.ask("params", "params:", timeout=1.0, tries=1)
             if params:
                 break
         if not params:
@@ -219,8 +224,9 @@ def main():
             say("--no-start: connection test only, not driving")
             return 0
 
-        r = link.ask(f"start {a.duration}", "starting")
-        if not r:
+        # A lost reply + resend gives "Already ON" = the first start arrived
+        r = link.ask(f"start {a.duration}", ("starting", "Already ON", "refusing"))
+        if not r or "refusing" in r:
             say("start refused: " + (link.lines[-1] if link.lines else "no reply"))
             return 1
         say(f"countdown {COUNTDOWN_S} s, then driving {a.duration} s (robot stops by itself)")
@@ -229,7 +235,7 @@ def main():
             time.sleep(1)
             if time.time() - link.last_rx > 3:
                 say("no data from robot for 3 s!")
-        link.ask("stop", "stopped")
+        link.ask("stop", "stopped")  # repeating stop is always safe
         time.sleep(0.5)
         csv_path = link.csv_path
         say(f"recorded {link.rows} rows -> {csv_path}")
