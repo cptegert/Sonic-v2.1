@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include "wifi_log.h"
 #include "distance_sensors.h"  // printSensorDiagnostics
+#include "battery.h"           // batteryCommand
 
 // ============================================================================
 // SETTINGS
@@ -42,6 +43,7 @@ struct BlackBox {
   uint8_t  stage;
   uint16_t maxCycleMs;
   uint32_t minFreeHeap;
+  uint32_t freeHeap;     // current free heap (last loop)
   uint32_t i2cErrors;
   LogSnapshot snap;
   uint32_t evTotal;    // events logged this session
@@ -149,11 +151,11 @@ static void formatSnapshot(char *buf, size_t len, const BlackBox &b) {
   const LogSnapshot &s = b.snap;
   snprintf(buf, len,
            "up=%.1fs loops=%lu stage=%s cyc=%ums max=%ums sw=%u drive=%u man=%u ble=%u rev=%u "
-           "spd=%d str=%d dist=[%d %d %d %d %d %d %d] heapMin=%lu i2cErr=%lu",
+           "spd=%d str=%d dist=[%d %d %d %d %d %d %d] bat=%.2fV heap=%lu heapMin=%lu i2cErr=%lu",
            b.uptimeMs / 1000.0, (unsigned long)b.loops, stageName(b.stage), s.cycleMs, b.maxCycleMs,
            s.startSwitch, s.driving, s.manual, s.connected, s.reversing, s.speedUs, s.steerUs,
            s.dist[0], s.dist[1], s.dist[2], s.dist[3], s.dist[4], s.dist[5], s.dist[6],
-           (unsigned long)b.minFreeHeap, (unsigned long)b.i2cErrors);
+           s.battCv / 100.0, (unsigned long)b.freeHeap, (unsigned long)b.minFreeHeap, (unsigned long)b.i2cErrors);
 }
 
 static void logCoreDumpSummary() {
@@ -287,6 +289,7 @@ void logger_setCommandHook(LoggerCommandHook hook) { commandHook = hook; }
 // out = Serial or the Wi-Fi printer, depending on where the command came from
 static void handleCommand(const char *cmd, bool driving, Print &out) {
   if (commandHook && commandHook(cmd, driving, out)) return;
+  if (batteryCommand(cmd, out)) return;
   if (strcmp(cmd, "log") == 0) {
     if (driving) { out.println("Not while driving (turn main switch OFF)"); return; }
     flushEvents(bootNo);
@@ -311,7 +314,7 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     LittleFS.remove(LOG_FILE_OLD);
     out.println("Log cleared");
   } else if (cmd[0] != 0) {
-    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, clear (delete log)");
+    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, battery, batcal <V>, clear (delete log)");
   }
 }
 
@@ -345,6 +348,7 @@ void logger_loop(const LogSnapshot &s) {
   if (s.cycleMs > bb.maxCycleMs) bb.maxCycleMs = s.cycleMs;
 
   uint32_t heap = ESP.getFreeHeap();
+  bb.freeHeap = heap;
   if (heap < bb.minFreeHeap) bb.minFreeHeap = heap;
   if (heap < LOW_HEAP_BYTES && !lowHeapLogged) {
     lowHeapLogged = true;

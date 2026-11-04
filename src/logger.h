@@ -55,6 +55,7 @@ struct LogSnapshot {
   uint8_t  driving;      // countdown finished, motors under control
   uint8_t  connected;    // RemoteXY BLE app connected
   uint8_t  reversing;
+  uint16_t battCv;       // battery voltage in 1/100 V (0 = not present)
 };
 
 void logger_begin();                        // FIRST thing in setup() (after Serial.begin)
