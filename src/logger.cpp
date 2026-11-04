@@ -6,6 +6,7 @@
 #include <esp_task_wdt.h>
 #include <stdarg.h>
 #include "wifi_log.h"
+#include "distance_sensors.h"  // printSensorDiagnostics
 
 // ============================================================================
 // SETTINGS
@@ -51,8 +52,8 @@ struct BlackBox {
 RTC_NOINIT_ATTR static BlackBox bb;
 
 static const char *STAGE_NAMES[STAGE_COUNT] = {
-  "setup", "loop_start", "remotexy", "sensor_FL", "sensor_L", "sensor_M",
-  "sensor_R", "sensor_FR", "button", "drive", "color", "outputs", "save",
+  "setup", "loop_start", "remotexy", "sensor_FFL", "sensor_FL", "sensor_L", "sensor_M",
+  "sensor_R", "sensor_FR", "sensor_FFR", "button", "drive", "color", "outputs", "save",
   "logger", "loop_end"
 };
 
@@ -292,13 +293,21 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     char snap[300];
     formatSnapshot(snap, sizeof(snap), bb);
     out.printf("boot #%lu: %s\n", (unsigned long)bootNo, snap);
+  } else if (strcmp(cmd, "scan") == 0) {
+    i2cScan(out);
+  } else if (strcmp(cmd, "sensors") == 0) {
+    printSensorDiagnostics(out);
+  } else if (strncmp(cmd, "on ", 3) == 0 || strncmp(cmd, "off ", 4) == 0) {
+    if (driving) { out.println("Not while driving"); return; }
+    sensorPowerCommand(cmd, out);
+    esp_task_wdt_reset();  // re-init can take a moment
   } else if (strcmp(cmd, "clear") == 0) {
     if (driving) { out.println("Not while driving"); return; }
     LittleFS.remove(LOG_FILE);
     LittleFS.remove(LOG_FILE_OLD);
     out.println("Log cleared");
   } else if (cmd[0] != 0) {
-    out.println("Commands: log (print flash log), status (live state), clear (delete log)");
+    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), clear (delete log)");
   }
 }
 

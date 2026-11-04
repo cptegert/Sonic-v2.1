@@ -7,7 +7,7 @@
 Screen layout:
   top     live status (updated 5x per second)
   middle  events / command output (PgUp / PgDn to scroll back)
-  bottom  command line: type  status, log, clear  + Enter
+  bottom  command line: type  status, sensors, log, clear  + Enter
 Quit with Ctrl+C (or type  quit).  --plain = simple scrolling text, no layout.
 Everything received is also saved to crashlogs/wifi_<date>.txt.
 
@@ -110,7 +110,7 @@ def run_curses(scr):
     scr.keypad(True)
 
     lines = [f"# talking to robot {ROBOT[0]}:{ROBOT[1]}, saving to {out_path}",
-             "# commands: status, log, clear, quit   |  PgUp/PgDn scroll"]
+             "# commands: status, sensors, log, clear, quit   |  PgUp/PgDn scroll"]
     status = "(waiting for robot...)"
     typed = ""
     scroll = 0  # lines scrolled back from the bottom

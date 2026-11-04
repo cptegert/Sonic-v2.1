@@ -6,7 +6,6 @@
 
 #include <Wire.h>
 #include <VL53L1X.h> //Need to install VL53L1X library, bt Pololu
-#include <VL53L0X.h>
 
 // ============================================================================
 // SENSOR PIN CONFIGURATION
@@ -14,26 +13,26 @@
 // XSHUT pins control sensor power-up for I2C address assignment
 // Safe GPIO pins selected to avoid ADC2 (BLE conflict) and strapping pins
 
-#define XSHUT_FAR_FAR_LEFT   32   // VL53L0X - Leftmost sensor
+#define XSHUT_FAR_FAR_LEFT   32   // VL53L1X - Leftmost sensor
 #define XSHUT_FAR_LEFT       15   // VL53L1X
 #define XSHUT_LEFT           13   // VL53L1X
 #define XSHUT_MIDDLE         12   // VL53L1X - Center sensor
 #define XSHUT_RIGHT          4    // VL53L1X
 #define XSHUT_FAR_RIGHT      16   // VL53L1X
-#define XSHUT_FAR_FAR_RIGHT  33   // VL53L0X - Rightmost sensor
+#define XSHUT_FAR_FAR_RIGHT  33   // VL53L1X - Rightmost sensor
 
 // ============================================================================
 // I2C ADDRESS CONFIGURATION
 // ============================================================================
 // Unique I2C addresses assigned to each sensor during initialization
 
-#define ADDRESS_FAR_FAR_LEFT   0x35   // VL53L0X
+#define ADDRESS_FAR_FAR_LEFT   0x35   // VL53L1X
 #define ADDRESS_FAR_LEFT       0x33   // VL53L1X
 #define ADDRESS_LEFT           0x30   // VL53L1X
 #define ADDRESS_MIDDLE         0x31   // VL53L1X
 #define ADDRESS_RIGHT          0x32   // VL53L1X
 #define ADDRESS_FAR_RIGHT      0x34   // VL53L1X
-#define ADDRESS_FAR_FAR_RIGHT  0x36   // VL53L0X
+#define ADDRESS_FAR_FAR_RIGHT  0x36   // VL53L1X
 
 // ============================================================================
 // SENSOR MEASUREMENT CONFIGURATION
@@ -56,8 +55,7 @@ extern int maxDistance;                // Maximum valid distance in cm (runtime 
 // SENSOR OBJECTS
 // ============================================================================
 
-extern VL53L1X sensorFarLeft, sensorLeft, sensorMiddle, sensorRight, sensorFarRight;
-extern VL53L0X sensorFarFarLeft, sensorFarFarRight;
+extern VL53L1X sensorFarFarLeft, sensorFarLeft, sensorLeft, sensorMiddle, sensorRight, sensorFarRight, sensorFarFarRight;
 
 // ============================================================================
 // IRQ CONFIGURATION (Optional - for interrupt-driven sensor reading)
@@ -104,14 +102,15 @@ extern float middle_signal_rate;   // Current signal rate of middle sensor (defi
 // Initialization (bool return for health monitoring)
 void initialize_Distance_Sensors();
 bool initSensor(VL53L1X &sensor, int xshutPin, uint8_t newAddress);
-bool initSensorL0X(VL53L0X &sensor, int xshutPin, uint8_t newAddress);
 
 // Reading
 void read_Distance_Sensors(int distances[]);
 int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scalingFactor, int offset);
-int getCalibratedDistanceL0X(VL53L0X &sensor, const char* name, float scaling, int offset);
 
 // Debug
 void debugSensors();
+void printSensorDiagnostics(Print &out);  // "sensors" command (serial / Wi-Fi)
+bool sensorPowerCommand(const char *cmd, Print &out);
+void i2cScan(Print &out);  // "scan" command  // "on M" / "off FFL" / "on all"
 
 #endif

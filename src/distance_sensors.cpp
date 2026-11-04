@@ -2,15 +2,26 @@
 #include "globals.h"  // For signal_rate_minimal
 #include <Arduino.h>
 #include <VL53L1X.h>
-#include <VL53L0X.h>
 #include "logger.h"
 
 // ============================================================================
 // SENSOR OBJECTS
 // ============================================================================
 
-VL53L1X sensorFarLeft, sensorLeft, sensorMiddle, sensorRight, sensorFarRight;
-VL53L0X sensorFarFarLeft, sensorFarFarRight;
+VL53L1X sensorFarFarLeft, sensorFarLeft, sensorLeft, sensorMiddle, sensorRight, sensorFarRight, sensorFarFarRight;
+
+// Init result per sensor [FFL, FL, L, M, R, FR, FFR]. A sensor that failed to
+// start is not read (would only cost I2C time + errors) and reports maxDistance.
+static bool sensorOk[7] = {false, false, false, false, false, false, false};
+
+// Which sensors to use [FFL, FL, L, M, R, FR, FFR]. A disabled sensor is kept
+// powered down (XSHUT LOW), so it is completely off the I2C bus, and reads maxDistance.
+// Changeable at runtime with the "on <name>" / "off <name>" commands (not saved).
+static bool sensorEnabled[7] = {true, true, true, true, true, true, true};
+// Test switch: initialize the sensor (on the bus, has its address) but stop its laser.
+// 2026-11-04: FFR only ranges correctly while FFL's laser is off -> FFL's laser
+// pulses disturb FFR (optical, or supply noise via shared power/ground wiring).
+static const bool sensorLaserOff[7] = {false, false, false, false, false, false, false};
 
 // ============================================================================
 // CALIBRATION DATA
@@ -65,15 +76,27 @@ void initialize_Distance_Sensors() {
     delay(20);
 
     Serial.println("  Initializing VL53L1X sensors...");
-    initSensor(sensorFarLeft,  XSHUT_FAR_LEFT,  ADDRESS_FAR_LEFT);
-    initSensor(sensorLeft,     XSHUT_LEFT,      ADDRESS_LEFT);
-    initSensor(sensorMiddle,   XSHUT_MIDDLE,    ADDRESS_MIDDLE);
-    initSensor(sensorRight,    XSHUT_RIGHT,     ADDRESS_RIGHT);
-    initSensor(sensorFarRight, XSHUT_FAR_RIGHT, ADDRESS_FAR_RIGHT);
-
-    Serial.println("  Initializing VL53L0X sensors...");
-    initSensorL0X(sensorFarFarLeft,  XSHUT_FAR_FAR_LEFT,  ADDRESS_FAR_FAR_LEFT);
-    initSensorL0X(sensorFarFarRight, XSHUT_FAR_FAR_RIGHT, ADDRESS_FAR_FAR_RIGHT);
+    VL53L1X *objs[7] = {&sensorFarFarLeft, &sensorFarLeft, &sensorLeft, &sensorMiddle,
+                        &sensorRight, &sensorFarRight, &sensorFarFarRight};
+    const int xshut[7] = {XSHUT_FAR_FAR_LEFT, XSHUT_FAR_LEFT, XSHUT_LEFT, XSHUT_MIDDLE,
+                          XSHUT_RIGHT, XSHUT_FAR_RIGHT, XSHUT_FAR_FAR_RIGHT};
+    const uint8_t addr[7] = {ADDRESS_FAR_FAR_LEFT, ADDRESS_FAR_LEFT, ADDRESS_LEFT, ADDRESS_MIDDLE,
+                             ADDRESS_RIGHT, ADDRESS_FAR_RIGHT, ADDRESS_FAR_FAR_RIGHT};
+    const char *names[7] = {"FFL", "FL", "L", "M", "R", "FR", "FFR"};
+    for (int i = 0; i < 7; i++) {
+        if (!sensorEnabled[i]) {
+            sensorOk[i] = false;  // XSHUT stays LOW -> powered down, off the bus
+            logEvent("sensor %s DISABLED in code (powered down)", names[i]);
+            continue;
+        }
+        sensorOk[i] = initSensor(*objs[i], xshut[i], addr[i]);
+        if (!sensorOk[i]) logEvent("sensor %s FAILED to init -> reads as %d cm", names[i], maxDistance);
+        if (sensorOk[i] && sensorLaserOff[i]) {
+            objs[i]->stopContinuous();  // on the bus, but not emitting
+            sensorOk[i] = false;        // not read, reports maxDistance
+            logEvent("sensor %s on bus, laser OFF (test)", names[i]);
+        }
+    }
 
 #if SENSOR_IRQ_ONLY
     // Configure IRQ pins only if using interrupt mode
@@ -131,49 +154,6 @@ bool initSensor(VL53L1X &sensor, int xshutPin, uint8_t newAddress) {
     return true;
 }
 
-bool initSensorL0X(VL53L0X &sensor, int xshutPin, uint8_t newAddress) {
-    digitalWrite(xshutPin, HIGH);
-    delay(10);
-
-    // Retry mechanism for VL53L0X (same as VL53L1X)
-    int retries = 3;
-    bool success = false;
-
-    while (retries > 0 && !success) {
-        sensor.setTimeout(50);
-        if (sensor.init()) {
-            success = true;
-            sensor.setAddress(newAddress);
-            sensor.setMeasurementTimingBudget(TIMING_BUDGET);  // Match VL53L1X timing
-            sensor.startContinuous(TIMING_BUDGET / 1000);      // Convert µs to ms
-
-            // Verify sensor responds after init
-            delay(60);
-            uint16_t testRead = sensor.readRangeContinuousMillimeters();
-            if (sensor.timeoutOccurred()) {
-                success = false;
-                retries--;
-                Serial.printf("⚠️ VL53L0X post-init test failed (pin %d), retries left: %d\n", xshutPin, retries);
-                sensor.stopContinuous();
-                delay(100);
-            } else {
-                Serial.printf("✓ VL53L0X sensor initialized on pin %d (addr 0x%02X)\n", xshutPin, newAddress);
-            }
-        } else {
-            retries--;
-            Serial.printf("⚠️ VL53L0X init failed (pin %d), retries left: %d\n", xshutPin, retries);
-            delay(100);
-        }
-    }
-
-    if (!success) {
-        Serial.printf("❌ VL53L0X sensor on pin %d failed - using fallback readings\n", xshutPin);
-        return false;
-    }
-
-    return true;
-}
-
 // ============================================================================
 // SENSOR READING FUNCTIONS
 // ============================================================================
@@ -193,7 +173,7 @@ void read_Distance_Sensors(int distances[]) {
     bool frr  = irq_flag_far_far_right; if (frr) irq_flag_far_far_right = false;
     interrupts();
 
-    if (fffl) distancesAll[0] = getCalibratedDistanceL0X(sensorFarFarLeft,  "FFL", scalingFactors[0], offsets[0]);
+    if (fffl) distancesAll[0] = getCalibratedDistance(sensorFarFarLeft,     "FFL", scalingFactors[0], offsets[0]);
     if (ffl)  distancesAll[1] = getCalibratedDistance(sensorFarLeft,        "FL",  scalingFactors[1], offsets[1]);
     if (fl)   distancesAll[2] = getCalibratedDistance(sensorLeft,           "L",   scalingFactors[2], offsets[2]);
     if (m)    {
@@ -202,27 +182,28 @@ void read_Distance_Sensors(int distances[]) {
     }
     if (r)    distancesAll[4] = getCalibratedDistance(sensorRight,          "R",   scalingFactors[4], offsets[4]);
     if (fr)   distancesAll[5] = getCalibratedDistance(sensorFarRight,       "FR",  scalingFactors[5], offsets[5]);
-    if (frr)  distancesAll[6] = getCalibratedDistanceL0X(sensorFarFarRight, "FFR", scalingFactors[6], offsets[6]);
+    if (frr)  distancesAll[6] = getCalibratedDistance(sensorFarFarRight,    "FFR", scalingFactors[6], offsets[6]);
 #else
     // Polling mode: read all sensors every cycle (faster, no IRQ wiring needed)
-    //distancesAll[0] = getCalibratedDistanceL0X(sensorFarFarLeft,  "FFL", scalingFactors[0], offsets[0]);
-    distancesAll[0] = maxDistance;
+    // Sensors that failed to init read as maxDistance (see sensorOk)
+    logStage(STAGE_SENSOR_FFL);
+    distancesAll[0] = sensorOk[0] ? getCalibratedDistance(sensorFarFarLeft,  "FFL", scalingFactors[0], offsets[0]) : maxDistance;
     logStage(STAGE_SENSOR_FL);
-    distancesAll[1] = getCalibratedDistance(sensorFarLeft,        "FL",  scalingFactors[1], offsets[1]);
+    distancesAll[1] = sensorOk[1] ? getCalibratedDistance(sensorFarLeft,     "FL",  scalingFactors[1], offsets[1]) : maxDistance;
     logStage(STAGE_SENSOR_L);
-    distancesAll[2] = getCalibratedDistance(sensorLeft,           "L",   scalingFactors[2], offsets[2]);
+    distancesAll[2] = sensorOk[2] ? getCalibratedDistance(sensorLeft,        "L",   scalingFactors[2], offsets[2]) : maxDistance;
 
     // Read middle sensor and capture its signal rate
     logStage(STAGE_SENSOR_M);
-    distancesAll[3] = getCalibratedDistance(sensorMiddle,         "M",   scalingFactors[3], offsets[3]);
+    distancesAll[3] = sensorOk[3] ? getCalibratedDistance(sensorMiddle,      "M",   scalingFactors[3], offsets[3]) : maxDistance;
     tempSignalRate = signalRate;  // Capture ONLY middle sensor's signal rate
 
     logStage(STAGE_SENSOR_R);
-    distancesAll[4] = getCalibratedDistance(sensorRight,          "R",   scalingFactors[4], offsets[4]);
+    distancesAll[4] = sensorOk[4] ? getCalibratedDistance(sensorRight,       "R",   scalingFactors[4], offsets[4]) : maxDistance;
     logStage(STAGE_SENSOR_FR);
-    distancesAll[5] = getCalibratedDistance(sensorFarRight,       "FR",  scalingFactors[5], offsets[5]);
-    //distancesAll[6] = getCalibratedDistanceL0X(sensorFarFarRight, "FFR", scalingFactors[6], offsets[6]);
-    distancesAll[6] = maxDistance;
+    distancesAll[5] = sensorOk[5] ? getCalibratedDistance(sensorFarRight,    "FR",  scalingFactors[5], offsets[5]) : maxDistance;
+    logStage(STAGE_SENSOR_FFR);
+    distancesAll[6] = sensorOk[6] ? getCalibratedDistance(sensorFarFarRight, "FFR", scalingFactors[6], offsets[6]) : maxDistance;
 
     //all sensors max distance (for fast acceleration)
 
@@ -257,16 +238,119 @@ void read_Distance_Sensors(int distances[]) {
     distances[2] = (int)(0.6 * right_near + 0.4 * right_far);
 }
 
+// Last raw reading per sensor, for the "sensors" diagnostics command
+struct SensorDiag { uint16_t rawMm; float rate; uint8_t rangeStatus; uint8_t i2cStatus; };
+static SensorDiag sensorDiag[7];
+
+// Last distance per sensor, returned while a sensor has no new measurement yet
+static int lastDistance[7] = {130, 130, 130, 130, 130, 130, 130};
+
+static int sensorIndex(const VL53L1X &s) {
+    const VL53L1X *all[7] = {&sensorFarFarLeft, &sensorFarLeft, &sensorLeft, &sensorMiddle,
+                             &sensorRight, &sensorFarRight, &sensorFarFarRight};
+    for (int i = 0; i < 7; i++) if (all[i] == &s) return i;
+    return -1;
+}
+
+static const char *SENSOR_NAMES[7] = {"FFL", "FL", "L", "M", "R", "FR", "FFR"};
+
+// "on FFL" / "off M" / "on all" / "off all": power sensors up/down at runtime (testing).
+// Returns false if the command is not a sensor command.
+bool sensorPowerCommand(const char *cmd, Print &out) {
+    bool on;
+    if (strncmp(cmd, "on ", 3) == 0) on = true;
+    else if (strncmp(cmd, "off ", 4) == 0) on = false;
+    else return false;
+    const char *name = cmd + (on ? 3 : 4);
+
+    VL53L1X *objs[7] = {&sensorFarFarLeft, &sensorFarLeft, &sensorLeft, &sensorMiddle,
+                        &sensorRight, &sensorFarRight, &sensorFarFarRight};
+    const int xshut[7] = {XSHUT_FAR_FAR_LEFT, XSHUT_FAR_LEFT, XSHUT_LEFT, XSHUT_MIDDLE,
+                          XSHUT_RIGHT, XSHUT_FAR_RIGHT, XSHUT_FAR_FAR_RIGHT};
+    const uint8_t addr[7] = {ADDRESS_FAR_FAR_LEFT, ADDRESS_FAR_LEFT, ADDRESS_LEFT, ADDRESS_MIDDLE,
+                             ADDRESS_RIGHT, ADDRESS_FAR_RIGHT, ADDRESS_FAR_FAR_RIGHT};
+    bool all = strcasecmp(name, "all") == 0;
+    bool found = false;
+    for (int i = 0; i < 7; i++) {
+        if (!all && strcasecmp(name, SENSOR_NAMES[i]) != 0) continue;
+        found = true;
+        if (on) {
+            if (sensorEnabled[i] && sensorOk[i]) continue;  // already running
+            digitalWrite(xshut[i], LOW);  // clean restart (chip address resets to 0x29)
+            delay(5);
+            *objs[i] = VL53L1X();  // library object back to default address/state too
+            sensorEnabled[i] = true;
+            lastDistance[i] = maxDistance;
+            sensorOk[i] = initSensor(*objs[i], xshut[i], addr[i]);
+            if (sensorOk[i] && sensorLaserOff[i]) { objs[i]->stopContinuous(); sensorOk[i] = false; }
+            out.printf("%s %s\n", SENSOR_NAMES[i], sensorOk[i] ? "ON" : "ON but init FAILED");
+        } else {
+            digitalWrite(xshut[i], LOW);  // powered down, off the bus
+            sensorEnabled[i] = false;
+            sensorOk[i] = false;
+            distancesAll[i] = maxDistance;
+            out.printf("%s OFF\n", SENSOR_NAMES[i]);
+        }
+        logEvent("sensor %s switched %s by command", SENSOR_NAMES[i], on ? "on" : "off");
+    }
+    if (!found) out.println("unknown sensor, use FFL FL L M R FR FFR or all");
+    return true;
+}
+
+// "scan": list every I2C address that answers (expected: 0x30-0x36, 0x29 = a sensor
+// that is powered but was never given its address, e.g. XSHUT not connected)
+void i2cScan(Print &out) {
+    int found = 0;
+    for (uint8_t a = 1; a < 127; a++) {
+        Wire.beginTransmission(a);
+        if (Wire.endTransmission() == 0) {
+            const char *who = "";
+            const uint8_t addrs[7] = {ADDRESS_FAR_FAR_LEFT, ADDRESS_FAR_LEFT, ADDRESS_LEFT, ADDRESS_MIDDLE,
+                                      ADDRESS_RIGHT, ADDRESS_FAR_RIGHT, ADDRESS_FAR_FAR_RIGHT};
+            for (int i = 0; i < 7; i++) if (addrs[i] == a) who = SENSOR_NAMES[i];
+            if (a == 0x29) who = "default address (unconfigured sensor!)";
+            out.printf("0x%02X %s\n", a, who);
+            found++;
+        }
+    }
+    out.printf("%d device(s) found\n", found);
+}
+
+void printSensorDiagnostics(Print &out) {
+    const char *names[7] = {"FFL", "FL", "L", "M", "R", "FR", "FFR"};
+    out.printf("min signal rate = %.2f MCPS, max distance = %d cm\n", signal_rate_minimal, maxDistance);
+    for (int i = 0; i < 7; i++) {
+        const SensorDiag &d = sensorDiag[i];
+        // rangeStatus: 0 = valid, 1 = sigma fail, 2 = signal fail, 4 = out of bounds,
+        // 7 = wrap-around, 255 = none (see VL53L1X::RangeStatus)
+        out.printf("%-3s init=%s raw=%4umm rate=%6.2f range_status=%3u i2c=%u -> %d cm\n",
+                   names[i], !sensorEnabled[i] ? "OFF " : sensorLaserOff[i] ? "NOLZ" : sensorOk[i] ? "ok  " : "FAIL", d.rawMm, d.rate, d.rangeStatus,
+                   d.i2cStatus, distancesAll[i]);
+    }
+}
+
 int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scalingFactor, int offset) {
-    // Quick check if data is already ready (most common case after startup)
+    int idx = sensorIndex(sensor);
+
+    // Only read when a NEW measurement is ready. Reading earlier is not just stale:
+    // the library calibrates the sensor (phasecal) on the first read() after start,
+    // and if that happens before the first measurement finished, the calibration is
+    // garbage and the sensor reports ~2.4 m "out of bounds" (status 4) until restarted.
+    // That is what broke the last-initialized sensor (FFR) at boot. Fixed 2026-11-04.
     if (!sensor.dataReady()) {
-        // Wait for data ready with timeout protection
-        unsigned long waitStart = millis();
+        if (sensor.last_status != 0) {
+            logI2CError(sensorName, sensor.last_status);
+            return maxDistance;
+        }
+        return (idx >= 0) ? lastDistance[idx] : maxDistance;  // no new data yet
     }
 
-    // Data is ready - read it immediately
     uint16_t rawDistance = sensor.read(false);
     signalRate = sensor.ranging_data.peak_signal_count_rate_MCPS;
+
+    if (idx >= 0) {
+        sensorDiag[idx] = {rawDistance, signalRate, (uint8_t)sensor.ranging_data.range_status, sensor.last_status};
+    }
 
     // I2C failure (sensor lost power / reset to default address / bus stuck)
     if (sensor.last_status != 0) {
@@ -275,29 +359,16 @@ int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scaling
     }
 
     // Reject weak signals or invalid readings
+    int result;
     if (signalRate < signal_rate_minimal || rawDistance == 0) {
-        return maxDistance;
+        result = maxDistance;
+    } else {
+        // Convert mm to cm and apply calibration
+        int calibratedDistance = (rawDistance + offset) * scalingFactor / 10;
+        result = (calibratedDistance > maxDistance) ? maxDistance : calibratedDistance;
     }
-
-    // Convert mm to cm and apply calibration
-    int calibratedDistance = (rawDistance + offset) * scalingFactor / 10;
-    return (calibratedDistance > maxDistance) ? maxDistance : calibratedDistance;
-}
-
-int getCalibratedDistanceL0X(VL53L0X &sensor, const char* name, float scalingFactor, int offset) {
-    unsigned long startTime = millis();
-    uint16_t rawDistance = 0;
-
-
-
-    if (sensor.timeoutOccurred() || rawDistance == 0) {
-        Serial.printf("⚠️ VL53L0X %s timeout/fault -> using maxDistance\n", name);
-        return maxDistance;
-    }
-
-    // Convert mm to cm and apply calibration
-    int calibratedDistance = (rawDistance + offset) * scalingFactor / 10;
-    return (calibratedDistance > maxDistance) ? maxDistance : calibratedDistance;
+    if (idx >= 0) lastDistance[idx] = result;
+    return result;
 }
 
 // ============================================================================
