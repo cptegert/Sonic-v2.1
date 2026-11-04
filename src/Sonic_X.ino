@@ -10,6 +10,7 @@
 #include <Preferences.h> //
 #include <Adafruit_NeoPixel.h>  // For addressable LED 
 #include "logger.h"  // black-box / crash logging
+#include "wifi_log.h"  // Wi-Fi live log for laptop
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 
 
@@ -97,6 +98,7 @@ void setup() {
   logger_begin();  // logs reset reason + previous session black box
 
   RemoteXY_Init (); 
+  wifiLog_begin();  // Wi-Fi access point for laptop live logs (BLE stays for RemoteXY)
 
   // Load saved settings from Preferences (EEPROM)
   preferences.begin("sonic-x", false); // namespace, read-only=false

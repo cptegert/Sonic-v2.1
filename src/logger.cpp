@@ -5,6 +5,7 @@
 #include <esp_core_dump.h>
 #include <esp_task_wdt.h>
 #include <stdarg.h>
+#include "wifi_log.h"
 
 // ============================================================================
 // SETTINGS
@@ -17,6 +18,7 @@ static const uint32_t HB_IDLE_MS      = 30000;      // heartbeat to flash while 
 static const uint32_t FLUSH_IDLE_MS   = 1000;       // flush events to flash when not driving
 static const uint16_t SLOW_LOOP_MS    = 100;        // log loops slower than this
 static const uint32_t LOW_HEAP_BYTES  = 20000;      // log once if free heap drops below
+static const uint32_t WIFI_STATUS_MS  = 1000 / WIFI_LOG_STATUS_HZ;
 
 // ============================================================================
 // RTC BLACK BOX (survives software resets / watchdog / panic, not power loss)
@@ -93,7 +95,10 @@ static void rotateIfNeeded() {
 
 // Write one line to the flash log (and optionally echo to Serial)
 static void appendLine(const char *line, bool echo = true) {
-  if (echo) Serial.println(line);
+  if (echo) {
+    Serial.println(line);
+    wifiLog_send(line);
+  }
   if (!fsOk) return;
   rotateIfNeeded();
   File f = LittleFS.open(LOG_FILE, FILE_APPEND);
@@ -246,6 +251,7 @@ void logEvent(const char *fmt, ...) {
   char line[BB_MSG_LEN + 24];
   snprintf(line, sizeof(line), "[LOG %7.3fs] %.*s", e.ms / 1000.0, BB_MSG_LEN, e.msg);
   Serial.println(line);
+  wifiLog_send(line);
 }
 
 void logI2CError(const char *sensorName, uint8_t status) {
@@ -274,6 +280,7 @@ static void printFile(const char *path, Print &out) {
   f.close();
 }
 
+// out = Serial or the Wi-Fi printer, depending on where the command came from
 static void handleCommand(const char *cmd, bool driving, Print &out) {
   if (strcmp(cmd, "log") == 0) {
     if (driving) { out.println("Not while driving (turn main switch OFF)"); return; }
@@ -369,4 +376,21 @@ void logger_loop(const LogSnapshot &s) {
 
   pollSerial(s.driving);
 
+  // Wi-Fi: commands from the laptop + live status stream
+  const char *cmd = wifiLog_poll();
+  if (cmd) {
+    char ack[48];
+    snprintf(ack, sizeof(ack), "# robot got command '%s'", cmd);
+    wifiLog_send(ack);
+    handleCommand(cmd, s.driving, wifiLog_printer());
+    wifiLog_flush();
+  }
+  static uint32_t lastWifiStatusMs = 0;
+  if (wifiLog_hasViewer() && now - lastWifiStatusMs >= WIFI_STATUS_MS) {
+    lastWifiStatusMs = now;
+    char line[320];
+    int n = snprintf(line, sizeof(line), "S #%lu ", (unsigned long)bootNo);
+    formatSnapshot(line + n, sizeof(line) - n, bb);
+    wifiLog_send(line);
+  }
 }
