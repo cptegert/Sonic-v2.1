@@ -4,6 +4,7 @@
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include "logger.h"
 
 static WiFiUDP udp;
 static bool started = false;
@@ -13,6 +14,79 @@ static uint32_t viewerLastSeenMs = 0;
 static const uint32_t VIEWER_TIMEOUT_MS = 10000;
 
 static char cmdBuf[32];
+
+// Wi-Fi events arrive in the system event task -> only set flags here, log them
+// from the loop (wifiLog_poll). 2026-11-04: the AP vanished after a batch run
+// while the program and BLE kept working; these tell us what happened next time.
+static volatile uint16_t evStaConnected = 0, evStaDisconnected = 0, evApStop = 0;
+static volatile uint16_t lastDisconnectReason = 0;
+static uint16_t seenStaConnected = 0, seenStaDisconnected = 0, seenApStop = 0;
+static uint32_t lastApCheckMs = 0, lastRestartMs = 0;
+static const uint32_t RESTART_SETTLE_MS = 3000;  // our own restart also fires AP_STOP: ignore it
+static bool hadViewer = false;
+
+static void onWifiEvent(arduino_event_id_t event, arduino_event_info_t info) {
+  switch (event) {
+    case ARDUINO_EVENT_WIFI_AP_STACONNECTED: evStaConnected++; break;
+    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
+      lastDisconnectReason = info.wifi_ap_stadisconnected.reason;
+      evStaDisconnected++;
+      break;
+    case ARDUINO_EVENT_WIFI_AP_STOP: evApStop++; break;
+    default: break;
+  }
+}
+
+static void startAp() {
+  WiFi.softAP(WIFI_LOG_SSID, WIFI_LOG_PASSWORD, WIFI_LOG_CHANNEL);
+  WiFi.setTxPower(WIFI_POWER_13dBm);
+  WiFi.setSleep(false);
+}
+
+static void restartAp(const char *why) {
+  lastRestartMs = millis();
+  logEvent("Wi-Fi AP restart (%s), heap=%lu", why, (unsigned long)ESP.getFreeHeap());
+  WiFi.softAPdisconnect(true);
+  delay(50);
+  WiFi.mode(WIFI_AP);
+  startAp();
+}
+
+// Called from the loop: log Wi-Fi events, keep the access point alive
+static void wifiHousekeeping() {
+  if (evStaConnected != seenStaConnected) {
+    seenStaConnected = evStaConnected;
+    logEvent("Wi-Fi: laptop/station joined (%d connected)", WiFi.softAPgetStationNum());
+  }
+  if (evStaDisconnected != seenStaDisconnected) {
+    seenStaDisconnected = evStaDisconnected;
+    logEvent("Wi-Fi: station left, reason %u", lastDisconnectReason);
+  }
+  uint32_t now = millis();
+  if (evApStop != seenApStop) {
+    seenApStop = evApStop;
+    if (now - lastRestartMs > RESTART_SETTLE_MS) {  // not caused by our own restart
+      logEvent("Wi-Fi: AP STOPPED");
+      restartAp("AP stopped");
+      return;
+    }
+  }
+  if (now - lastRestartMs < RESTART_SETTLE_MS) return;
+  if (now - lastApCheckMs < 5000) return;
+  lastApCheckMs = now;
+  if (!(WiFi.getMode() & WIFI_MODE_AP) || WiFi.softAPIP() == IPAddress(0, 0, 0, 0)) {
+    restartAp("AP not running");
+    return;
+  }
+  // Laptop was talking to us, then went silent and nobody is connected anymore:
+  // restart the AP once (cheap, ~0.1 s) in case it stopped beaconing silently.
+  if (wifiLog_hasViewer()) hadViewer = true;
+  if (hadViewer && wifiLog_msSinceViewer() > 30000 && WiFi.softAPgetStationNum() == 0 &&
+      now - lastRestartMs > 60000) {
+    hadViewer = false;
+    restartAp("viewer silent 30 s, no stations");
+  }
+}
 
 // Collects printed text and sends it as UDP packets (for long outputs like "log")
 class UdpPrinter : public Print {
@@ -43,12 +117,11 @@ class UdpPrinter : public Print {
 static UdpPrinter printer;
 
 void wifiLog_begin() {
+  WiFi.onEvent(onWifiEvent);
   WiFi.mode(WIFI_AP);
   // Reduced TX power: full power means ~250 mA current spikes on the 3.3 V rail.
   // 8.5 dBm lost the link on the far side of the track (2026-11-04), 13 dBm ~2x range.
-  WiFi.softAP(WIFI_LOG_SSID, WIFI_LOG_PASSWORD, WIFI_LOG_CHANNEL);
-  WiFi.setTxPower(WIFI_POWER_13dBm);
-  WiFi.setSleep(false);
+  startAp();
   udp.begin(WIFI_LOG_PORT);
   started = true;
   Serial.printf("Wi-Fi log: join '%s' (pw %s), then run tools/wifi_log.py  [robot %s:%d]\n",
@@ -74,6 +147,7 @@ void wifiLog_send(const char *line) {
 
 const char *wifiLog_poll() {
   if (!started) return nullptr;
+  wifiHousekeeping();
   int n = udp.parsePacket();
   if (n <= 0) return nullptr;
   int len = udp.read(cmdBuf, sizeof(cmdBuf) - 1);
