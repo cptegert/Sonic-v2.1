@@ -223,6 +223,20 @@ void read_Distance_Sensors(int distances[]) {
     // Update middle sensor signal rate for display
     middle_signal_rate = tempSignalRate;
 
+#if SENSOR_MAX_RISE_CM > 0
+    // Rise-rate limit (see distance_sensors.h): spread sudden signal-loss jumps
+    // over a few loops, pass decreases instantly.
+    static int limited[7] = {130, 130, 130, 130, 130, 130, 130};
+    for (int i = 0; i < 7; i++) {
+        if (distancesAll[i] > limited[i] + SENSOR_MAX_RISE_CM) {
+            limited[i] += SENSOR_MAX_RISE_CM;
+        } else {
+            limited[i] = distancesAll[i];
+        }
+        distancesAll[i] = limited[i];
+    }
+#endif
+
     // Blend sensor readings for better curve detection
     // LEFT: 60% near sensor + 40% angled sensors
     float left_near = distancesAll[2];

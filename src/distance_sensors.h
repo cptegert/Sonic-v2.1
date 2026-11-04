@@ -51,6 +51,16 @@
 
 extern int maxDistance;                // Maximum valid distance in cm (runtime adjustable)
 
+// Rise-rate limit: a sensor reading may INCREASE by at most this many cm per update.
+// Decreases (something getting closer) always pass instantly.
+// Why: when a wall gets oblique the sensor loses its signal and the reading jumps
+// from 40-100 cm straight to maxDistance in one loop. Telemetry 2026-11-04: those
+// steps caused ~90% of the big D-term kicks; normal increases are <=23 cm/loop (99%).
+// Test 2026-11-04 with 15 cm: D kicks -60%, but driving not better (more time near
+// walls; "wall opened up" is noticed ~0.1-0.2 s later, so corners are entered late).
+// 0 = off (raw behaviour).
+#define SENSOR_MAX_RISE_CM 0
+
 // ============================================================================
 // SENSOR OBJECTS
 // ============================================================================

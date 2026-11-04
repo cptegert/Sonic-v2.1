@@ -25,25 +25,29 @@ class UdpPrinter : public Print {
   void flush() override {
     if (len == 0) return;
     if (wifiLog_hasViewer()) {
+      // Only used for command output while stopped (e.g. "log"). Sending fast fills
+      // the Wi-Fi buffers and the heap (LOW HEAP 13 KB seen) -> small packets, pace
+      // them, and wait while memory is low.
+      for (int i = 0; i < 50 && ESP.getFreeHeap() < 25000; i++) delay(10);
       udp.beginPacket(viewerIp, viewerPort);
       udp.write(buf, len);
       udp.endPacket();
-      delay(3);  // only used for command output while stopped; lets the Wi-Fi stack keep up
+      delay(15);
     }
     len = 0;
   }
  private:
-  uint8_t buf[1024];
+  uint8_t buf[512];
   size_t len = 0;
 };
 static UdpPrinter printer;
 
 void wifiLog_begin() {
   WiFi.mode(WIFI_AP);
-  // Low TX power: the laptop is close by, and full power means ~250 mA current
-  // spikes on the 3.3 V rail (we are still hunting a power problem)
+  // Reduced TX power: full power means ~250 mA current spikes on the 3.3 V rail.
+  // 8.5 dBm lost the link on the far side of the track (2026-11-04), 13 dBm ~2x range.
   WiFi.softAP(WIFI_LOG_SSID, WIFI_LOG_PASSWORD, WIFI_LOG_CHANNEL);
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
+  WiFi.setTxPower(WIFI_POWER_13dBm);
   WiFi.setSleep(false);
   udp.begin(WIFI_LOG_PORT);
   started = true;
