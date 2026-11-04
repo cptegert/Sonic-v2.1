@@ -1,6 +1,8 @@
 #ifndef AUTONOMOUSDRIVING_H
 #define AUTONOMOUSDRIVING_H
 
+#include <stdint.h>
+
 // Uncomment to enable debug serial output (WARNING: blocks main loop, reduces performance)
 // #define DEBUG_SERIAL_OUTPUT
 
@@ -14,4 +16,21 @@ void Read_Gyro(); //if not written here, then error: 'Read_Gyro' was not declare
 extern const int SERVO_MIN_US;
 extern const int SERVO_CENTER_US;
 extern const int SERVO_MAX_US;
+
+// Snapshot of the controller's internals from the last autonomous_mode() call,
+// for the Wi-Fi telemetry recorder (PID tuning). Read-only copy, no effect on driving.
+struct PidTelemetry {
+  float left, middle, right;   // blended distances used by the controller (cm)
+  float bias;                  // obstacle bias added to the error
+  float error;                 // right - left + bias
+  float pTerm, iTerm, dTerm;   // kp*error, ki*integral, kd*derivative
+  float pid;                   // sum of the terms
+  float steerUs;               // servo output (also while reversing)
+  float speedUs;               // motor output
+  float steerMult;             // speed reduction from steering
+  float brake;                 // predictive brake factor
+  uint8_t reversing;           // 1 = in reversing mode
+  uint8_t trapped;             // 1 = TRAPPED detected this loop
+};
+extern PidTelemetry pidTel;
 #endif

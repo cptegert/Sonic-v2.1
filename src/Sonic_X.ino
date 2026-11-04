@@ -12,6 +12,7 @@
 #include "logger.h"  // black-box / crash logging
 #include "wifi_log.h"  // Wi-Fi live log for laptop
 extern bool reversing;  // autonomousDriving.cpp, for the logger
+void sendTelemetry(bool driving, float cycleTimeMs);
 
 
 Preferences preferences;
@@ -383,6 +384,51 @@ void loop() {
   snap.connected = RemoteXY.connect_flag;
   snap.reversing = reversing;
   logger_loop(snap);
+  sendTelemetry(driving, cycleTimeMs);
   logStage(STAGE_LOOP_END);
+}
+
+// ============================================================================
+// PID TELEMETRY (Wi-Fi): one CSV row per loop while driving, for PID tuning.
+// Only sent while a laptop viewer is connected (tools/wifi_log.py saves it to
+// crashlogs/run_*.csv). UDP, never blocks. Columns must match TELEMETRY_HEADER.
+// ============================================================================
+static const char *TELEMETRY_HEADER =
+  "t_ms,loop,cyc_ms,manual,rev,trapped,FFL,FL,L,M,R,FR,FFR,left,mid,right,"
+  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble";
+
+void sendTelemetry(bool driving, float cycleTimeMs) {
+  static bool wasDriving = false;
+  static uint16_t runNo = 0;
+  static uint32_t loopNo = 0, lastHeaderMs = 0;
+  if (!wifiLog_hasViewer()) { wasDriving = driving; return; }
+
+  if (driving && !wasDriving) { runNo++; loopNo = 0; lastHeaderMs = 0; }
+  wasDriving = driving;
+  if (!driving) return;
+
+  char line[360];
+  uint32_t now = millis();
+  // Header with run number at start and every 2 s (viewer may join mid-run)
+  if (lastHeaderMs == 0 || now - lastHeaderMs >= 2000) {
+    lastHeaderMs = now;
+    snprintf(line, sizeof(line), "TH,%u,%s", runNo, TELEMETRY_HEADER);
+    wifiLog_send(line);
+  }
+  const PidTelemetry &t = pidTel;
+  snprintf(line, sizeof(line),
+           "T,%lu,%lu,%.1f,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,"
+           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u",
+           (unsigned long)now, (unsigned long)loopNo++, cycleTimeMs, manual_mode_switch,
+           t.reversing, t.trapped,
+           distancesAll[0], distancesAll[1], distancesAll[2], distancesAll[3],
+           distancesAll[4], distancesAll[5], distancesAll[6],
+           t.left, t.middle, t.right,
+           t.bias, t.error, t.pTerm, t.iTerm, t.dTerm, t.pid,
+           manual_mode_switch ? steer_output : t.steerUs,
+           manual_mode_switch ? final_speed : t.speedUs,
+           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag);
+  wifiLog_send(line);
 } 
+
 

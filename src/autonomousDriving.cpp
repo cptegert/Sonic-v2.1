@@ -28,12 +28,18 @@ float initial_heading = 0.0;
 float heading_at_hit = 0.0;
 bool initial_heading_set = false;
 
+PidTelemetry pidTel;  // copy of the controller internals for telemetry (see header)
+
 void autonomous_mode() {
+  pidTel = PidTelemetry();  // fresh telemetry snapshot each call (all 0)
 
   // Read sensor distances
   float left_distance = distances[0];
   float middle_distance = distances[1];
   float right_distance = distances[2];
+  pidTel.left = left_distance;
+  pidTel.middle = middle_distance;
+  pidTel.right = right_distance;
 
   // ===================================================================================
   //        STUCK DETECTION → ENTER REVERSING MODE IF ANY SENSOR <20CM FOR > 0.9 SEC
@@ -86,6 +92,9 @@ void autonomous_mode() {
     }
 
     servo.writeMicroseconds(reverseSteer);
+    pidTel.reversing = 1;
+    pidTel.steerUs = reverseSteer;
+    pidTel.speedUs = final_speed;
 
     // End reversing after duration
     if (millis() - reverseStart > REVERSE_DURATION_MS) {
@@ -119,6 +128,7 @@ void autonomous_mode() {
   if (middle_distance < 35 && left_distance < 35 && right_distance < 35) {
       // Force immediate reversing - we're trapped!
       closeStart = millis() - STUCK_DELAY_MS;
+      pidTel.trapped = 1;
       static uint32_t lastTrappedLog = 0;  // was printed every loop -> slowed the loop
       if (millis() - lastTrappedLog > 1000) {
         lastTrappedLog = millis();
@@ -170,6 +180,12 @@ void autonomous_mode() {
 
   // Raw PID output
   float pid = kp * error + ki * integral + kd * derivative;
+  pidTel.bias = bias;
+  pidTel.error = error;
+  pidTel.pTerm = kp * error;
+  pidTel.iTerm = ki * integral;
+  pidTel.dTerm = kd * derivative;
+  pidTel.pid = pid;
 
   // ==================================TURNING AMPLIFIER=============================================
   // === PID steering amplification when reversing (not used now, but kept for logic consistency) ===
@@ -253,6 +269,10 @@ void autonomous_mode() {
   final_speed = constrain(final_speed, min_speed_pwm, 2000);
 
   motor.writeMicroseconds(final_speed);
+  pidTel.steerUs = steer_output;
+  pidTel.speedUs = final_speed;
+  pidTel.steerMult = speed_multiplier;
+  pidTel.brake = predictive_brake;
 
 
   // ===================================================================================

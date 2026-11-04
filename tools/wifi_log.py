@@ -11,6 +11,10 @@ Screen layout:
 Quit with Ctrl+C (or type  quit).  --plain = simple scrolling text, no layout.
 Everything received is also saved to crashlogs/wifi_<date>.txt.
 
+PID telemetry: while the robot drives, every loop is saved as one CSV row to
+crashlogs/run_<date>_<time>_r<N>.csv (one file per drive). Summarise a run with:
+  ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/analyze_run.py <csv>
+
 Status fields: up=uptime  cyc=loop ms  max=slowest loop since last heartbeat
 sw=main switch  drive=driving  man=manual  ble=app connected  rev=reversing
 spd/str=motor/servo us  dist=7 sensors cm [FFL FL L M R FR FFR]  i2cErr=I2C errors
@@ -37,7 +41,40 @@ sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(("", 0))
 sock.settimeout(0.5)
 
-rx = queue.Queue()  # ("status", text) / ("line", text)
+rx = queue.Queue()  # ("status", text) / ("line", text) / ("rec", text)
+
+
+class Recorder:
+    """Writes telemetry rows (T,...) to one CSV file per run (TH,<run>,<header>)."""
+    def __init__(self):
+        self.run = None
+        self.file = None
+        self.rows = 0
+        self.path = None
+
+    def header(self, line):
+        _, run, header = line.split(",", 2)
+        if run == self.run:
+            return  # repeated header of the same run
+        if self.file:
+            self.file.close()
+        self.run = run
+        self.rows = 0
+        self.path = time.strftime(f"crashlogs/run_%Y-%m-%d_%H%M%S_r{run}.csv")
+        self.file = open(self.path, "w", buffering=1)
+        self.file.write(header + "\n")
+        rx.put(("line", time.strftime("%H:%M:%S ") + f"# recording run {run} -> {self.path}"))
+
+    def row(self, line):
+        if not self.file:
+            return  # header not seen yet (comes within 2 s)
+        self.file.write(line[2:] + "\n")
+        self.rows += 1
+        if self.rows % 25 == 0:
+            rx.put(("rec", f"REC run {self.run}: {self.rows} rows -> {self.path}"))
+
+
+recorder = Recorder()
 
 
 def send(cmd):
@@ -76,6 +113,12 @@ def receiver():
         last_rx = time.time()
         stamp = time.strftime("%H:%M:%S")
         for line in data.decode("utf-8", "replace").splitlines():
+            if line.startswith("T,"):
+                recorder.row(line)
+                continue
+            if line.startswith("TH,"):
+                recorder.header(line)
+                continue
             out.write(f"{stamp} {line}\n")
             if line.startswith("S "):
                 rx.put(("status", line[2:]))
@@ -93,6 +136,8 @@ def run_plain():
     last_status = 0.0
     while True:
         kind, text = rx.get()
+        if kind == "rec":
+            continue
         if kind == "status":
             if time.time() - last_status < 2:
                 continue
@@ -112,6 +157,7 @@ def run_curses(scr):
     lines = [f"# talking to robot {ROBOT[0]}:{ROBOT[1]}, saving to {out_path}",
              "# commands: status, sensors, log, clear, quit   |  PgUp/PgDn scroll"]
     status = "(waiting for robot...)"
+    rec = ""
     typed = ""
     scroll = 0  # lines scrolled back from the bottom
 
@@ -131,6 +177,8 @@ def run_curses(scr):
                 kind, text = rx.get_nowait()
                 if kind == "status":
                     status = text
+                elif kind == "rec":
+                    rec = text
                 else:
                     lines.append(text)
                     if scroll:
@@ -146,6 +194,9 @@ def run_curses(scr):
         for i, row in enumerate(status_rows):
             scr.addnstr(i, 0, row, w - 1, curses.color_pair(1) | curses.A_BOLD)
         top = len(status_rows)
+        if rec:
+            scr.addnstr(top, 0, rec, w - 1, curses.color_pair(4))
+            top += 1
         scr.hline(top, 0, curses.ACS_HLINE, w)
         # log area
         area = h - top - 3
