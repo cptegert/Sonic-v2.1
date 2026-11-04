@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <VL53L1X.h>
 #include <VL53L0X.h>
+#include "logger.h"
 
 // ============================================================================
 // SENSOR OBJECTS
@@ -206,14 +207,19 @@ void read_Distance_Sensors(int distances[]) {
     // Polling mode: read all sensors every cycle (faster, no IRQ wiring needed)
     //distancesAll[0] = getCalibratedDistanceL0X(sensorFarFarLeft,  "FFL", scalingFactors[0], offsets[0]);
     distancesAll[0] = maxDistance;
+    logStage(STAGE_SENSOR_FL);
     distancesAll[1] = getCalibratedDistance(sensorFarLeft,        "FL",  scalingFactors[1], offsets[1]);
+    logStage(STAGE_SENSOR_L);
     distancesAll[2] = getCalibratedDistance(sensorLeft,           "L",   scalingFactors[2], offsets[2]);
 
     // Read middle sensor and capture its signal rate
+    logStage(STAGE_SENSOR_M);
     distancesAll[3] = getCalibratedDistance(sensorMiddle,         "M",   scalingFactors[3], offsets[3]);
     tempSignalRate = signalRate;  // Capture ONLY middle sensor's signal rate
 
+    logStage(STAGE_SENSOR_R);
     distancesAll[4] = getCalibratedDistance(sensorRight,          "R",   scalingFactors[4], offsets[4]);
+    logStage(STAGE_SENSOR_FR);
     distancesAll[5] = getCalibratedDistance(sensorFarRight,       "FR",  scalingFactors[5], offsets[5]);
     //distancesAll[6] = getCalibratedDistanceL0X(sensorFarFarRight, "FFR", scalingFactors[6], offsets[6]);
     distancesAll[6] = maxDistance;
@@ -261,6 +267,12 @@ int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scaling
     // Data is ready - read it immediately
     uint16_t rawDistance = sensor.read(false);
     signalRate = sensor.ranging_data.peak_signal_count_rate_MCPS;
+
+    // I2C failure (sensor lost power / reset to default address / bus stuck)
+    if (sensor.last_status != 0) {
+        logI2CError(sensorName, sensor.last_status);
+        return maxDistance;
+    }
 
     // Reject weak signals or invalid readings
     if (signalRate < signal_rate_minimal || rawDistance == 0) {

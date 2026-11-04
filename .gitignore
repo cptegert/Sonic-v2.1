@@ -3,3 +3,6 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+# local log captures, crash dumps, firmware ELFs (tools/serial_capture.py, tools/wifi_log.py)
+crashlogs/
+__pycache__/

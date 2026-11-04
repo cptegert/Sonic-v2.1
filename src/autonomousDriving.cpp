@@ -2,6 +2,7 @@
 #include "globals.h"            //for seeing left speed, right speed, move motors
 #include "distance_sensors.h"   //for seeing distance values "extern int distances[3];"
 #include <Arduino.h>            //for serial printing and more? Arduino functionality
+#include "logger.h"
 // Note: We don't include RemoteXY_Config.h here to avoid multiple definition errors.
 // Instead, we use global copies of the needed fields (declared in globals.h)
 
@@ -118,7 +119,11 @@ void autonomous_mode() {
   if (middle_distance < 35 && left_distance < 35 && right_distance < 35) {
       // Force immediate reversing - we're trapped!
       closeStart = millis() - STUCK_DELAY_MS;
-      Serial.println("⚠️ TRAPPED! All sensors blocked - forcing reverse");
+      static uint32_t lastTrappedLog = 0;  // was printed every loop -> slowed the loop
+      if (millis() - lastTrappedLog > 1000) {
+        lastTrappedLog = millis();
+        logEvent("TRAPPED, all sensors <35cm -> reverse");
+      }
   }
   // NORMAL OBSTACLE AVOIDANCE: Middle obstacle detected
   else if (middle_distance < 80) {

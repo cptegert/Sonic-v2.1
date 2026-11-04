@@ -9,6 +9,8 @@
 #include "globals.h"  // Include globals for access to all global variables
 #include <Preferences.h> //
 #include <Adafruit_NeoPixel.h>  // For addressable LED 
+#include "logger.h"  // black-box / crash logging
+extern bool reversing;  // autonomousDriving.cpp, for the logger
 
 
 Preferences preferences;
@@ -86,6 +88,14 @@ float UPHILL_MULTIPLIER = 1.2;    // Default: increase speed by 20% on uphill
 
 
 void setup() {
+  // Serial + LED first: LED goes red while booting, so a robot stuck in a reset
+  // loop (brownout) no longer keeps showing the last color (e.g. green)
+  Serial.begin(115200);
+  pixel.begin();
+  pixel.setBrightness(50); // Set brightness (0-255, 50 = moderate brightness)
+  setStatusLed(pixel.Color(255, 0, 0));
+  logger_begin();  // logs reset reason + previous session black box
+
   RemoteXY_Init (); 
 
   // Load saved settings from Preferences (EEPROM)
@@ -155,14 +165,7 @@ void setup() {
   
 
 
-  Serial.begin(115200);
-
   pinMode(START_BUTTON_PIN, INPUT_PULLUP); // button to GND, no external resistor needed
-
-  // Initialize Neopixel status LED
-  pixel.begin();
-  pixel.setBrightness(50); // Set brightness (0-255, 50 = moderate brightness)
-  pixel.show(); // Initialize all pixels to 'off'
 
   motor.setPeriodHertz(50);   // Standard 50 Hz ESC frequency
   servo.setPeriodHertz(50);   // Standard 50 Hz ESC frequency
@@ -179,13 +182,15 @@ void setup() {
 
   initialize_Distance_Sensors();// Initialize distance sensors (if applicable)
 
+  logger_setupDone();  // enables loop watchdog (loop stuck >5 s -> reset + logged)
 }
 
 void loop() {
   // Measuˇre cycle time - start
   unsigned long cycleStartTime = micros();
+  logStage(STAGE_REMOTEXY);
   RemoteXYEngine.handler ();
-  read_Distance_Sensors(distances);
+  read_Distance_Sensors(distances);  // sets STAGE_SENSOR_* itself
 
   // debugSensors();
   
@@ -197,6 +202,7 @@ void loop() {
  if (RemoteXY.CURVE_SPEED_REDUCTION < 0) { RemoteXY.CURVE_SPEED_REDUCTION = 0; }
 
  // === PHYSICAL START BUTTON → toggles the same main switch as the app ===
+ logStage(STAGE_BUTTON);
  bool startButtonReading = digitalRead(START_BUTTON_PIN);
  if (startButtonReading != startButtonLastReading) {
    startButtonLastChange = millis();  // raw change, restart debounce timer
@@ -207,7 +213,7 @@ void loop() {
    if (startButtonStableState == HIGH) {  // released (trigger once per press, on release, so the hand is away before the timer starts)
      RemoteXY.Start_switch = !RemoteXY.Start_switch;
      startedByButton = (RemoteXY.Start_switch == 1);
-     Serial.println(RemoteXY.Start_switch ? "Start button: main switch ON" : "Start button: main switch OFF");
+     logEvent(RemoteXY.Start_switch ? "start button: main switch ON" : "start button: main switch OFF");
    }
  }
 
@@ -240,6 +246,8 @@ void loop() {
  UPHILL_MULTIPLIER = RemoteXY.UPHILL_MULTIPLIER;
 
 //if MAIN_SWITCH ON
+  logStage(STAGE_DRIVE);
+  bool driving = false;  // for the logger: countdown finished, motors under control
   if (Start_switch==1) {
     // If not already waiting for the 5-second delay
     if (waitingForStart == false) {
@@ -265,6 +273,7 @@ void loop() {
     }
 
     if (shouldStart) {
+      driving = true;
       // driving: purple = manual, green = autonomous
       setStatusLed(manual_mode_switch == 1 ? pixel.Color(160, 0, 255) : pixel.Color(0, 255, 0));
       //if MANUAL_MODE
@@ -283,12 +292,15 @@ void loop() {
     motor.writeMicroseconds(1500);
     servo.writeMicroseconds(1500);
     // Button held while stopped = waiting for the starting whistle
-    // Otherwise dim white = ready
-    setStatusLed(startButtonStableState == LOW ? pixel.Color(0, 0, 255) : pixel.Color(120, 120, 120));
+    // Otherwise dim white = ready, or orange = ready but last reset was abnormal
+    // (brownout / crash / watchdog) -> read the log over USB: type "log"
+    uint32_t idleColor = logger_lastResetAbnormal() ? pixel.Color(255, 80, 0) : pixel.Color(120, 120, 120);
+    setStatusLed(startButtonStableState == LOW ? pixel.Color(0, 0, 255) : idleColor);
   }
 
 
 // Update output variables for RemoteXY display
+  logStage(STAGE_OUTPUTS);
   RemoteXY.linearbar_01 = map(distancesAll[0], 0, maxDistance, 0, 100);
   RemoteXY.linearbar_02 = map(distancesAll[1], 0, maxDistance, 0, 100);
   RemoteXY.linearbar_03 = map(distancesAll[2], 0, maxDistance, 0, 100);
@@ -316,10 +328,11 @@ void loop() {
   RemoteXY.steer_linearbar = map((int)steer_output, 2125, 875, 0, 100);
 
   // Save button event handling
+  logStage(STAGE_SAVE);
   if (RemoteXY.Save_EEPROM_button == 1) { // If Save button pressed
     saveAllSettings();
     RemoteXY.Save_EEPROM_button = 0; // Reset button
-    Serial.println("Settings saved to EEPROM.");
+    logEvent("settings saved");
   }
 
   // Calibration button event handling
@@ -355,5 +368,19 @@ void loop() {
   float cycleTimeMs = (cycleEndTime - cycleStartTime) / 1000.0;
   // Note: If you need to display cycle time, map it to CYCLE_TIME_SHOW or add a cycle time variable to RemoteXY
   RemoteXY.CYCLE_TIME_SHOW = cycleTimeMs;
+
+  // Black box snapshot + heartbeat + serial commands (log / status / clear)
+  LogSnapshot snap;
+  snap.cycleMs = (uint16_t)min(cycleTimeMs, 65535.0f);
+  for (int i = 0; i < 7; i++) snap.dist[i] = distancesAll[i];
+  snap.speedUs = (int16_t)final_speed;
+  snap.steerUs = (int16_t)steer_output;
+  snap.startSwitch = Start_switch;
+  snap.manual = manual_mode_switch;
+  snap.driving = driving;
+  snap.connected = RemoteXY.connect_flag;
+  snap.reversing = reversing;
+  logger_loop(snap);
+  logStage(STAGE_LOOP_END);
 } 
 
