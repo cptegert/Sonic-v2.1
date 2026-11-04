@@ -24,6 +24,7 @@
 void wifiLog_begin();
 void wifiLog_send(const char *line);       // one line (no newline needed); no-op without a viewer
 bool wifiLog_hasViewer();
+uint32_t wifiLog_msSinceViewer();          // ms since the last packet from the laptop (UINT32_MAX = never)
 // Call once per loop. Returns a received command (e.g. "log") or nullptr.
 const char *wifiLog_poll();
 Print &wifiLog_printer();                  // Print target for long command output (e.g. log dump)

@@ -13,6 +13,8 @@
 #include "wifi_log.h"  // Wi-Fi live log for laptop
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
+bool remoteCommand(const char *cmd, bool driving, Print &out);
+void remoteRunWatchdog();
 
 
 Preferences preferences;
@@ -185,6 +187,7 @@ void setup() {
 
   initialize_Distance_Sensors();// Initialize distance sensors (if applicable)
 
+  logger_setCommandHook(remoteCommand);  // params / set / start / stop over serial + Wi-Fi
   logger_setupDone();  // enables loop watchdog (loop stuck >5 s -> reset + logged)
 }
 
@@ -219,6 +222,9 @@ void loop() {
      logEvent(RemoteXY.Start_switch ? "start button: main switch ON" : "start button: main switch OFF");
    }
  }
+
+ // Remote (laptop) run: time limit + stop if the laptop link is lost
+ remoteRunWatchdog();
 
  // === SYNC RemoteXY → Global Variables ===
  // Convert PID slider values (0-100) to actual PID coefficients
@@ -432,3 +438,87 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
 } 
 
 
+// ============================================================================
+// REMOTE RUN CONTROL (laptop over Wi-Fi or USB serial), for automated PID tests
+//   params                 show current values
+//   set kp|ki|kd|speed <v> change a value (not while driving; same as the app sliders)
+//   start <seconds>        full 5 s countdown, then drive for max <seconds> (1..120)
+//   stop                   main switch OFF
+// Safety: a remote-started run ALWAYS stops by itself when its time is up, and
+// stops within REMOTE_LINK_TIMEOUT_MS if the laptop stops sending (link lost).
+// The physical button and the phone app can stop it at any time.
+// ============================================================================
+static const uint32_t REMOTE_LINK_TIMEOUT_MS = 1000;
+static const uint32_t REMOTE_MAX_RUN_S = 120;
+static bool remoteRun = false;
+static uint32_t remoteRunEndMs = 0;
+
+static void printParams(Print &out) {
+  out.printf("params: kp=%.2f ki=%.3f kd=%.2f speed=%.0f main_switch=%u manual=%u five_sec_bypass=%u remote_run=%u\n",
+             RemoteXY.PID_P * 15.0 / 100.0, RemoteXY.PID_I * 0.1 / 100.0, RemoteXY.PID_D * 15.0 / 100.0,
+             RemoteXY.MAX_SPEED, RemoteXY.Start_switch, RemoteXY.manual_mode_switch,
+             RemoteXY.FIVE_SEC_WAIT, remoteRun);
+}
+
+bool remoteCommand(const char *cmd, bool driving, Print &out) {
+  char name[8];
+  float value;
+  if (strcmp(cmd, "params") == 0) {
+    printParams(out);
+    return true;
+  }
+  if (strcmp(cmd, "stop") == 0) {
+    RemoteXY.Start_switch = 0;
+    remoteRun = false;
+    logEvent("remote: stop");
+    out.println("stopped");
+    return true;
+  }
+  if (sscanf(cmd, "set %7s %f", name, &value) == 2) {
+    if (RemoteXY.Start_switch) { out.println("Not while main switch is ON"); return true; }
+    // Same scaling as the app sliders (P/D: 0-15 in steps of 0.15, I: 0-0.1 in steps of 0.001)
+    if (strcmp(name, "kp") == 0)         RemoteXY.PID_P = (int8_t)constrain(lroundf(value * 100.0f / 15.0f), 0, 100);
+    else if (strcmp(name, "ki") == 0)    RemoteXY.PID_I = (int8_t)constrain(lroundf(value * 100.0f / 0.1f), 0, 100);
+    else if (strcmp(name, "kd") == 0)    RemoteXY.PID_D = (int8_t)constrain(lroundf(value * 100.0f / 15.0f), 0, 100);
+    else if (strcmp(name, "speed") == 0) RemoteXY.MAX_SPEED = constrain(value, 0.0f, 100.0f);
+    else { out.println("set what? kp ki kd speed"); return true; }
+    logEvent("remote: set %s %.3f", name, value);
+    printParams(out);
+    return true;
+  }
+  int seconds;
+  if (sscanf(cmd, "start %d", &seconds) == 1) {
+    if (RemoteXY.Start_switch) { out.println("Already ON"); return true; }
+    if (RemoteXY.manual_mode_switch) { out.println("Manual mode is ON in the app - refusing"); return true; }
+    if (wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
+      out.println("start needs a live Wi-Fi link (tools/auto_run.py keeps it alive) - refusing");
+      return true;
+    }
+    if (seconds < 1 || seconds > (int)REMOTE_MAX_RUN_S) { out.printf("start 1..%lu seconds\n", (unsigned long)REMOTE_MAX_RUN_S); return true; }
+    RemoteXY.Start_switch = 1;
+    startedByButton = true;  // forces the full 5 s countdown (bypass switch ignored)
+    remoteRun = true;
+    remoteRunEndMs = millis() + START_DELAY_MS + (uint32_t)seconds * 1000;
+    logEvent("remote: start, 5 s countdown + %d s", seconds);
+    out.printf("starting: 5 s countdown, then %d s\n", seconds);
+    return true;
+  }
+  return false;
+}
+
+void remoteRunWatchdog() {
+  if (!remoteRun) return;
+  if (RemoteXY.Start_switch == 0) {  // stopped by button / app / stop command
+    remoteRun = false;
+    return;
+  }
+  if ((int32_t)(millis() - remoteRunEndMs) >= 0) {
+    RemoteXY.Start_switch = 0;
+    remoteRun = false;
+    logEvent("remote run: time up, stopped");
+  } else if (wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
+    RemoteXY.Start_switch = 0;
+    remoteRun = false;
+    logEvent("remote run: laptop link LOST, stopped");
+  }
+}

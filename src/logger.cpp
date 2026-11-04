@@ -281,8 +281,12 @@ static void printFile(const char *path, Print &out) {
   f.close();
 }
 
+static LoggerCommandHook commandHook = nullptr;
+void logger_setCommandHook(LoggerCommandHook hook) { commandHook = hook; }
+
 // out = Serial or the Wi-Fi printer, depending on where the command came from
 static void handleCommand(const char *cmd, bool driving, Print &out) {
+  if (commandHook && commandHook(cmd, driving, out)) return;
   if (strcmp(cmd, "log") == 0) {
     if (driving) { out.println("Not while driving (turn main switch OFF)"); return; }
     flushEvents(bootNo);
@@ -307,7 +311,7 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     LittleFS.remove(LOG_FILE_OLD);
     out.println("Log cleared");
   } else if (cmd[0] != 0) {
-    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), clear (delete log)");
+    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, clear (delete log)");
   }
 }
 

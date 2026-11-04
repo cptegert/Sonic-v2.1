@@ -55,6 +55,11 @@ bool wifiLog_hasViewer() {
   return started && viewerPort != 0 && (millis() - viewerLastSeenMs) < VIEWER_TIMEOUT_MS;
 }
 
+uint32_t wifiLog_msSinceViewer() {
+  if (!started || viewerPort == 0) return UINT32_MAX;
+  return millis() - viewerLastSeenMs;
+}
+
 void wifiLog_send(const char *line) {
   if (!wifiLog_hasViewer()) return;
   udp.beginPacket(viewerIp, viewerPort);
@@ -95,6 +100,7 @@ static NullPrinter nullPrinter;
 void wifiLog_begin() {}
 void wifiLog_send(const char *) {}
 bool wifiLog_hasViewer() { return false; }
+uint32_t wifiLog_msSinceViewer() { return UINT32_MAX; }
 const char *wifiLog_poll() { return nullptr; }
 Print &wifiLog_printer() { return nullPrinter; }
 void wifiLog_flush() {}

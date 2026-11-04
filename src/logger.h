@@ -65,4 +65,9 @@ void logEvent(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void logI2CError(const char *sensorName, uint8_t status);  // rate-limited
 bool logger_lastResetAbnormal();            // brownout / crash / watchdog on last boot
 
+// Extra serial/Wi-Fi commands handled elsewhere (e.g. remote run control in Sonic_X.ino).
+// The hook returns true if it handled the command.
+typedef bool (*LoggerCommandHook)(const char *cmd, bool driving, Print &out);
+void logger_setCommandHook(LoggerCommandHook hook);
+
 #endif
