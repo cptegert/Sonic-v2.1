@@ -304,7 +304,7 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     i2cScan(out);
   } else if (strcmp(cmd, "sensors") == 0) {
     printSensorDiagnostics(out);
-  } else if (strncmp(cmd, "on ", 3) == 0 || strncmp(cmd, "off ", 4) == 0) {
+  } else if (strncmp(cmd, "on ", 3) == 0 || strncmp(cmd, "off ", 4) == 0 || strcmp(cmd, "fault") == 0) {
     if (driving) { out.println("Not while driving"); return; }
     sensorPowerCommand(cmd, out);
     esp_task_wdt_reset();  // re-init can take a moment

@@ -50,6 +50,40 @@ def crossings(errors):
     return n
 
 
+def lap_time(rows, min_s=2.0, max_s=20.0):
+    """Lap period from the repeating sensor pattern (autocorrelation of the
+    left-right difference, resampled to 40 ms). Returns (seconds, quality 0..1)
+    or (None, 0) if no clear repetition (run too short, irregular driving)."""
+    if len(rows) < 50:
+        return None, 0.0
+    t0 = rows[0]["t_ms"]
+    dt = 40.0
+    n = int((rows[-1]["t_ms"] - t0) / dt)
+    sig, j = [], 0
+    for k in range(n):
+        t = t0 + k * dt
+        while j + 1 < len(rows) and rows[j + 1]["t_ms"] <= t:
+            j += 1
+        sig.append(rows[j]["right"] - rows[j]["left"])
+    mean = sum(sig) / len(sig)
+    sig = [x - mean for x in sig]
+    var = sum(x * x for x in sig) or 1.0
+    lags = range(int(min_s * 1000 / dt), min(int(max_s * 1000 / dt), len(sig) // 2))
+    corr = {lag: sum(a * b for a, b in zip(sig, sig[lag:])) / var * len(sig) / (len(sig) - lag)
+            for lag in lags}
+    if not corr:
+        return None, 0.0
+    best = max(corr.values())
+    if best < 0.6:  # no clear repetition (too short, fell over, irregular)
+        return None, best
+    # 2 or 3 laps also repeat: take the SHORTEST peak that is nearly as good
+    for lag in lags:
+        c = corr[lag]
+        if c >= 0.85 * best and c >= corr.get(lag - 1, -1) and c >= corr.get(lag + 1, -1):
+            return lag * dt / 1000.0, c
+    return None, best
+
+
 def stats(rows):
     if len(rows) < 2:
         return None
@@ -78,6 +112,7 @@ def stats(rows):
         "rev_pct": 100.0 * (len(rows) - len(fwd)) / len(rows),
         "trapped": sum(1 for r in rows if r["trapped"]),
         "near_pct": 100.0 * near / max(1, len(fwd)),
+        "lap_s": lap_time(rows)[0] or float("nan"),
     }
 
 
@@ -136,6 +171,9 @@ def main():
     line("time reversing (%)", "rev_pct", "{:.1f}")
     line("TRAPPED loops", "trapped", "{:.0f}")
     line(f"closer than {NEAR_WALL_CM} cm to a wall (%)", "near_pct", "{:.1f}")
+    lap, q = lap_time(rows)
+    print(f"lap time (from repeating pattern)   {lap:.2f} s (match {q:.2f})" if lap else
+          f"lap time: no clear repetition found (match {q:.2f})")
 
     print()
     print("Hints (rough rules, look at the data before changing anything):")

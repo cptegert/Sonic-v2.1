@@ -90,7 +90,7 @@ def main():
             break
         print(f"   {path}: near-wall {st['near_pct']:.1f}%  full-lock {st['sat_pct']:.1f}%  "
               f"swings {st['osc_per_s']:.2f}/s  D-jumps {st['d_jump_rms']:.0f}us  "
-              f"reversing {st['rev_pct']:.1f}%  trapped {st['trapped']:.0f}"
+              f"reversing {st['rev_pct']:.1f}%  trapped {st['trapped']:.0f}  lap {st['lap_s']:.2f}s"
               + (f"  battery {rows[-1]['batt_v']:.2f} V" if rows[-1].get("batt_v", 0) > 5 else ""), flush=True)
         if rows[-1].get("batt_v", 99) < 10.5 and rows[-1].get("batt_v", 0) > 5:
             aborted = f"run {n}: battery low ({rows[-1]['batt_v']:.2f} V) - charge it"
@@ -107,7 +107,7 @@ def main():
     if aborted:
         print("BATCH ABORTED - " + aborted)
         print("=" * 100)
-    keys = [("near_pct", "near wall %", "{:.1f}"), ("sat_pct", "full lock %", "{:.1f}"),
+    keys = [("lap_s", "lap s", "{:.2f}"), ("near_pct", "near wall %", "{:.1f}"), ("sat_pct", "full lock %", "{:.1f}"),
             ("osc_per_s", "swings/s", "{:.2f}"), ("d_jump_rms", "D-jump us", "{:.0f}"),
             ("rev_count", "reverses", "{:.1f}"), ("speed_mean", "motor us", "{:.0f}")]
     print(f"{'setting':28s} {'runs':>4s}  " + "  ".join(f"{h:>18s}" for _, h, _ in keys))

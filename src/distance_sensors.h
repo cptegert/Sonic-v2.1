@@ -121,6 +121,19 @@ int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scaling
 void debugSensors();
 void printSensorDiagnostics(Print &out);  // "sensors" command (serial / Wi-Fi)
 bool sensorPowerCommand(const char *cmd, Print &out);
-void i2cScan(Print &out);  // "scan" command  // "on M" / "off FFL" / "on all"
+void i2cScan(Print &out);  // "scan" command
+
+// Sensor health / I2C bus recovery (2026-11-04: after an impact the whole I2C bus
+// failed, all sensors read "nothing there" and the robot drove blind into the wall
+// until power-off).
+// A sensor is "failing" in a loop when its I2C read fails or it delivered no new
+// measurement for SENSOR_STALE_MS. "Blind" = at least SENSOR_BLIND_MIN_FAILING
+// sensors failing for SENSOR_BLIND_LOOPS loops in a row.
+#define SENSOR_STALE_MS          300
+#define SENSOR_BLIND_MIN_FAILING 2
+#define SENSOR_BLIND_LOOPS       3
+bool sensors_blind();
+int sensors_failing();          // sensors failing in the last read cycle
+int sensors_recover();          // reset I2C bus + re-init all sensors, returns sensors OK  // "on M" / "off FFL" / "on all"
 
 #endif

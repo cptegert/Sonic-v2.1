@@ -14,6 +14,12 @@ VL53L1X sensorFarFarLeft, sensorFarLeft, sensorLeft, sensorMiddle, sensorRight, 
 // start is not read (would only cost I2C time + errors) and reports maxDistance.
 static bool sensorOk[7] = {false, false, false, false, false, false, false};
 
+// Health tracking (see distance_sensors.h)
+static uint32_t lastNewDataMs[7] = {0, 0, 0, 0, 0, 0, 0};
+static bool failingNow[7] = {false, false, false, false, false, false, false};
+static int failingCount = 0;
+static int badLoops = 0;
+
 // Which sensors to use [FFL, FL, L, M, R, FR, FFR]. A disabled sensor is kept
 // powered down (XSHUT LOW), so it is completely off the I2C bus, and reads maxDistance.
 // Changeable at runtime with the "on <name>" / "off <name>" commands (not saved).
@@ -90,6 +96,7 @@ void initialize_Distance_Sensors() {
             continue;
         }
         sensorOk[i] = initSensor(*objs[i], xshut[i], addr[i]);
+        lastNewDataMs[i] = millis();
         if (!sensorOk[i]) logEvent("sensor %s FAILED to init -> reads as %d cm", names[i], maxDistance);
         if (sensorOk[i] && sensorLaserOff[i]) {
             objs[i]->stopContinuous();  // on the bus, but not emitting
@@ -160,6 +167,7 @@ bool initSensor(VL53L1X &sensor, int xshutPin, uint8_t newAddress) {
 
 void read_Distance_Sensors(int distances[]) {
     float tempSignalRate = 0.0;  // Temporary storage for middle sensor signal rate
+    for (int i = 0; i < 7; i++) failingNow[i] = false;
 
 #if SENSOR_IRQ_ONLY
     // IRQ-driven mode: only read sensors that have signaled DATA_READY
@@ -223,6 +231,11 @@ void read_Distance_Sensors(int distances[]) {
     // Update middle sensor signal rate for display
     middle_signal_rate = tempSignalRate;
 
+    // Health: how many working sensors failed this cycle
+    failingCount = 0;
+    for (int i = 0; i < 7; i++) if (sensorOk[i] && failingNow[i]) failingCount++;
+    badLoops = (failingCount >= SENSOR_BLIND_MIN_FAILING) ? badLoops + 1 : 0;
+
 #if SENSOR_MAX_RISE_CM > 0
     // Rise-rate limit (see distance_sensors.h): spread sudden signal-loss jumps
     // over a few loops, pass decreases instantly.
@@ -271,6 +284,15 @@ static const char *SENSOR_NAMES[7] = {"FFL", "FL", "L", "M", "R", "FR", "FFR"};
 // "on FFL" / "off M" / "on all" / "off all": power sensors up/down at runtime (testing).
 // Returns false if the command is not a sensor command.
 bool sensorPowerCommand(const char *cmd, Print &out) {
+    if (strcmp(cmd, "fault") == 0) {
+        // Test of the sensor failsafe: power down L and R behind the code's back
+        // (like a loose wire) -> I2C errors -> blind -> bus recovery should fix it
+        digitalWrite(XSHUT_LEFT, LOW);
+        digitalWrite(XSHUT_RIGHT, LOW);
+        logEvent("TEST: sensors L and R powered down (simulated dropout)");
+        out.println("fault: L and R powered down, watch the log for BLIND / recovery");
+        return true;
+    }
     bool on;
     if (strncmp(cmd, "on ", 3) == 0) on = true;
     else if (strncmp(cmd, "off ", 4) == 0) on = false;
@@ -296,6 +318,7 @@ bool sensorPowerCommand(const char *cmd, Print &out) {
             sensorEnabled[i] = true;
             lastDistance[i] = maxDistance;
             sensorOk[i] = initSensor(*objs[i], xshut[i], addr[i]);
+            lastNewDataMs[i] = millis();
             if (sensorOk[i] && sensorLaserOff[i]) { objs[i]->stopContinuous(); sensorOk[i] = false; }
             out.printf("%s %s\n", SENSOR_NAMES[i], sensorOk[i] ? "ON" : "ON but init FAILED");
         } else {
@@ -354,10 +377,16 @@ int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scaling
     if (!sensor.dataReady()) {
         if (sensor.last_status != 0) {
             logI2CError(sensorName, sensor.last_status);
+            if (idx >= 0) failingNow[idx] = true;
+            return maxDistance;
+        }
+        if (idx >= 0 && millis() - lastNewDataMs[idx] > SENSOR_STALE_MS) {
+            failingNow[idx] = true;  // alive on the bus but no new data: stuck sensor
             return maxDistance;
         }
         return (idx >= 0) ? lastDistance[idx] : maxDistance;  // no new data yet
     }
+    if (idx >= 0) lastNewDataMs[idx] = millis();
 
     uint16_t rawDistance = sensor.read(false);
     signalRate = sensor.ranging_data.peak_signal_count_rate_MCPS;
@@ -369,6 +398,7 @@ int getCalibratedDistance(VL53L1X &sensor, const char* sensorName, float scaling
     // I2C failure (sensor lost power / reset to default address / bus stuck)
     if (sensor.last_status != 0) {
         logI2CError(sensorName, sensor.last_status);
+        if (idx >= 0) failingNow[idx] = true;
         return maxDistance;
     }
 
@@ -401,3 +431,51 @@ void debugSensors() {
     Serial.print(" | Signal:"); Serial.println(middle_signal_rate);
 }
 
+
+// ============================================================================
+// SENSOR HEALTH + I2C BUS RECOVERY
+// ============================================================================
+bool sensors_blind() { return badLoops >= SENSOR_BLIND_LOOPS; }
+int sensors_failing() { return failingCount; }
+
+// Free a stuck I2C bus (a slave holding SDA low) and re-initialise all sensors.
+// Blocks ~0.1-1 s: the caller must put the motor in neutral first.
+int sensors_recover() {
+    Wire.end();
+    // Clock out a stuck slave: up to 9 SCL pulses until SDA is released, then STOP
+    pinMode(SDA, INPUT_PULLUP);
+    pinMode(SCL, OUTPUT_OPEN_DRAIN);
+    digitalWrite(SCL, HIGH);
+    for (int i = 0; i < 9 && digitalRead(SDA) == LOW; i++) {
+        digitalWrite(SCL, LOW);  delayMicroseconds(5);
+        digitalWrite(SCL, HIGH); delayMicroseconds(5);
+    }
+    pinMode(SDA, OUTPUT_OPEN_DRAIN);
+    digitalWrite(SDA, LOW);  delayMicroseconds(5);
+    digitalWrite(SCL, HIGH); delayMicroseconds(5);
+    digitalWrite(SDA, HIGH); delayMicroseconds(5);
+    Wire.begin();
+    Wire.setClock(400000);
+
+    VL53L1X *objs[7] = {&sensorFarFarLeft, &sensorFarLeft, &sensorLeft, &sensorMiddle,
+                        &sensorRight, &sensorFarRight, &sensorFarFarRight};
+    const int xshut[7] = {XSHUT_FAR_FAR_LEFT, XSHUT_FAR_LEFT, XSHUT_LEFT, XSHUT_MIDDLE,
+                          XSHUT_RIGHT, XSHUT_FAR_RIGHT, XSHUT_FAR_FAR_RIGHT};
+    const uint8_t addr[7] = {ADDRESS_FAR_FAR_LEFT, ADDRESS_FAR_LEFT, ADDRESS_LEFT, ADDRESS_MIDDLE,
+                             ADDRESS_RIGHT, ADDRESS_FAR_RIGHT, ADDRESS_FAR_FAR_RIGHT};
+    for (int i = 0; i < 7; i++) digitalWrite(xshut[i], LOW);  // all off -> default address
+    delay(10);
+    int ok = 0;
+    for (int i = 0; i < 7; i++) {
+        if (!sensorEnabled[i]) continue;
+        *objs[i] = VL53L1X();
+        sensorOk[i] = initSensor(*objs[i], xshut[i], addr[i]);
+        if (sensorOk[i] && sensorLaserOff[i]) { objs[i]->stopContinuous(); sensorOk[i] = false; }
+        lastDistance[i] = maxDistance;
+        lastNewDataMs[i] = millis();
+        if (sensorOk[i]) ok++;
+    }
+    badLoops = 0;
+    failingCount = 0;
+    return ok;
+}

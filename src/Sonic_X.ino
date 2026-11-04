@@ -16,6 +16,7 @@ extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
 bool remoteCommand(const char *cmd, bool driving, Print &out);
 void remoteRunWatchdog();
+bool sensorFailsafe();
 
 
 Preferences preferences;
@@ -200,6 +201,7 @@ void loop() {
   RemoteXYEngine.handler ();
   battery_loop();
   read_Distance_Sensors(distances);  // sets STAGE_SENSOR_* itself
+  bool sensorsBlind = sensorFailsafe();  // I2C bus dead -> motor neutral + bus recovery
 
   // debugSensors();
   
@@ -284,7 +286,15 @@ void loop() {
       setStatusLed(blinkOn ? pixel.Color(0, 0, 255) : 0);
     }
 
-    if (shouldStart) {
+    if (shouldStart && sensorsBlind && manual_mode_switch == 0) {
+      // Sensors dead: do NOT drive blind. Motor neutral (already set by the
+      // failsafe), LED red. Driving continues by itself once sensors are back.
+      driving = true;
+      motor.writeMicroseconds(1500);
+      servo.writeMicroseconds(1500);
+      final_speed = 1500;
+      setStatusLed(pixel.Color(255, 0, 0));
+    } else if (shouldStart) {
       driving = true;
       // driving: purple = manual, green = autonomous
       setStatusLed(manual_mode_switch == 1 ? pixel.Color(160, 0, 255) : pixel.Color(0, 255, 0));
@@ -533,4 +543,47 @@ void remoteRunWatchdog() {
     remoteRun = false;
     logEvent("remote run: laptop link LOST, stopped");
   }
+}
+
+// ============================================================================
+// SENSOR FAILSAFE (2026-11-04: after an impact the I2C bus died, all sensors read
+// "nothing there" and the robot drove blind into the wall until power-off)
+// Blind (>=2 sensors failing for 3 loops) -> motor neutral right away, then reset
+// the I2C bus + re-init sensors (at most once per second). "Blind" is cleared
+// only after 5 healthy loops in a row. Returns true while blind.
+// ============================================================================
+bool sensorFailsafe() {
+  static bool blind = false;
+  static int healthyLoops = 0;
+  static uint32_t lastRecoveryMs = 0;
+  static uint32_t blindSinceMs = 0;
+
+  if (sensors_blind()) {
+    if (!blind) {
+      blind = true;
+      blindSinceMs = millis();
+      logEvent("SENSORS BLIND (%d failing) -> motor neutral", sensors_failing());
+    }
+    healthyLoops = 0;
+  } else if (blind) {
+    healthyLoops = (sensors_failing() < SENSOR_BLIND_MIN_FAILING) ? healthyLoops + 1 : 0;
+    if (healthyLoops >= 5) {
+      blind = false;
+      logEvent("sensors OK again after %lu ms", (unsigned long)(millis() - blindSinceMs));
+    }
+  }
+
+  if (blind) {
+    motor.writeMicroseconds(1500);  // before the recovery blocks the loop
+    servo.writeMicroseconds(1500);
+    final_speed = 1500;
+    if (millis() - lastRecoveryMs > 1000) {
+      lastRecoveryMs = millis();
+      logStage(STAGE_SENSOR_M);  // if recovery itself hangs, the watchdog log shows a sensor stage
+      uint32_t t = millis();
+      int ok = sensors_recover();
+      logEvent("I2C bus recovery: %d sensors OK (%lu ms)", ok, (unsigned long)(millis() - t));
+    }
+  }
+  return blind;
 }
