@@ -111,9 +111,9 @@ void setup() {
   preferences.begin("sonic-x", false); // namespace, read-only=false
 
   // Load PID float values from preferences and convert to slider positions (0-100)
-  kp = preferences.getFloat("kp", 5.0);
-  ki = preferences.getFloat("ki", 0.01);
-  kd = preferences.getFloat("kd", 4.5);
+  kp = preferences.getFloat("kp", 7.05);   // defaults = values tuned 2026-11-04
+  ki = preferences.getFloat("ki", 0.008);
+  kd = preferences.getFloat("kd", 7.5);
 
   // Convert PID floats back to slider values for display in app
   RemoteXY.PID_P = (int8_t)(kp * 100.0 / 15.0);  // kp range: 0-15.0 → slider: 0-100
@@ -121,7 +121,7 @@ void setup() {
   RemoteXY.PID_D = (int8_t)(kd * 100.0 / 15.0);  // kd range: 0-15.0 → slider: 0-100
 
   // Load other settings to global variables and RemoteXY
-  speed_limit = preferences.getFloat("max_speed", 64.0);
+  speed_limit = preferences.getFloat("max_speed", 60.0);
   RemoteXY.MAX_SPEED = speed_limit;
 
   speed_reduction = preferences.getFloat("curve_reduce", 0.55);
@@ -469,8 +469,8 @@ static bool remoteRun = false;
 static uint32_t remoteRunEndMs = 0;
 
 static void printParams(Print &out) {
-  out.printf("params: kp=%.2f ki=%.3f kd=%.2f speed=%.0f main_switch=%u manual=%u five_sec_bypass=%u remote_run=%u battery=%.2fV\n",
-             RemoteXY.PID_P * 15.0 / 100.0, RemoteXY.PID_I * 0.1 / 100.0, RemoteXY.PID_D * 15.0 / 100.0,
+  out.printf("params: robot=%s kp=%.2f ki=%.3f kd=%.2f speed=%.0f main_switch=%u manual=%u five_sec_bypass=%u remote_run=%u battery=%.2fV\n",
+             ROBOT_NAME, RemoteXY.PID_P * 15.0 / 100.0, RemoteXY.PID_I * 0.1 / 100.0, RemoteXY.PID_D * 15.0 / 100.0,
              RemoteXY.MAX_SPEED, RemoteXY.Start_switch, RemoteXY.manual_mode_switch,
              RemoteXY.FIVE_SEC_WAIT, remoteRun, battery_volts());
 }

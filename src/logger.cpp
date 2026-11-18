@@ -8,6 +8,7 @@
 #include "wifi_log.h"
 #include "distance_sensors.h"  // printSensorDiagnostics
 #include "battery.h"           // batteryCommand
+#include "robot_config.h"      // ROBOT_NAME
 
 // ============================================================================
 // SETTINGS
@@ -197,7 +198,7 @@ void logger_begin() {
   if (!fsOk) Serial.println("LOGGER: LittleFS mount failed, logging to Serial only");
 
   appendLine("", false);
-  appendf(true, "===== BOOT #%lu  reset reason: %s =====", (unsigned long)bootNo, resetReasonStr(reason));
+  appendf(true, "===== %s BOOT #%lu  reset reason: %s =====", ROBOT_NAME, (unsigned long)bootNo, resetReasonStr(reason));
 
   bool prevValid = (bb.magic == BB_MAGIC && bb.size == sizeof(BlackBox) && bb.evFlushed <= bb.evTotal);
   if (prevValid) {

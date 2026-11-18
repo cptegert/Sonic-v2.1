@@ -29,7 +29,8 @@ extern Preferences preferences;
 #include <BLEDevice.h>
 
 // RemoteXY connection settings 
-#define REMOTEXY_BLUETOOTH_NAME "Sonic-X"
+#include "robot_config.h"
+#define REMOTEXY_BLUETOOTH_NAME ROBOT_NAME   // per robot, see platformio.ini
 #define REMOTEXY_ACCESS_PASSWORD "EQ123"
 
 

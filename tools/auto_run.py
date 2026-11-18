@@ -5,7 +5,9 @@ record telemetry, stop, switch Wi-Fi back, analyse.
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/auto_run.py --kp 6 --kd 7.5 --duration 25
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/auto_run.py --no-start   (connection test only)
 
-Options: --kp --ki --kd --speed  (omitted = unchanged), --duration seconds of
+Options: --robot sonic|shadow|auto (default auto: the robot network the laptop
+is on, or the only one in reach; asks if both robots are on),
+--kp --ki --kd --speed  (omitted = unchanged), --duration seconds of
 driving after the 5 s countdown (default 25, max 120), --no-start, --no-wifi-switch
 (laptop already on Sonic-X-log), --home NAME (NetworkManager connection to return to;
 default = the Wi-Fi connection active when the script starts).
@@ -36,7 +38,10 @@ import threading
 import time
 
 ROBOT = (os.environ.get("SONIC_IP", "192.168.4.1"), 4210)
-ROBOT_SSID = "Sonic-X-log"
+import json as _json
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "robots.json")) as _f:
+    ROBOTS = {k: v["ssid"] for k, v in _json.load(_f).items() if not k.startswith("_")}
+ROBOT_SSID = None  # set from --robot in main() ("auto" = the robot network in reach)
 ROBOT_PASSWORD = "sonicx123"
 COUNTDOWN_S = 5
 
@@ -77,6 +82,26 @@ def join_robot_wifi():
         if rc == 0 or "Not authorized" in out:
             break
     return rc == 0, out
+
+
+def pick_robot(choice):
+    """--robot auto: the robot network the laptop is on, else the only one in reach."""
+    if choice != "auto":
+        return choice, "given"
+    cur = current_ssid()
+    for key, ssid in ROBOTS.items():
+        if cur == ssid:
+            return key, "laptop is on its Wi-Fi"
+    nmcli("dev", "wifi", "rescan")
+    time.sleep(3)
+    _, out = nmcli("-t", "-f", "SSID", "dev", "wifi", "list")
+    seen = {l.strip() for l in out.splitlines()}
+    found = [k for k, ssid in ROBOTS.items() if ssid in seen]
+    if len(found) == 1:
+        return found[0], "only robot network in reach"
+    if not found:
+        return None, "no robot Wi-Fi in reach (robot off?)"
+    return None, f"several robots in reach ({', '.join(found)}) - choose with --robot"
 
 
 def active_wifi():
@@ -179,7 +204,18 @@ def main():
     ap.add_argument("--no-start", action="store_true")
     ap.add_argument("--no-wifi-switch", action="store_true")
     ap.add_argument("--home")
+    ap.add_argument("--robot", choices=sorted(ROBOTS) + ["auto"], default="auto")
     a = ap.parse_args()
+    global ROBOT_SSID
+    if "SONIC_IP" in os.environ:  # test against a local fake robot
+        key, why = (a.robot if a.robot != "auto" else "sonic"), "test"
+    else:
+        key, why = pick_robot(a.robot)
+    if not key:
+        say("robot: " + why)
+        return 1
+    ROBOT_SSID = ROBOTS[key]
+    say(f"robot: {key} ({why}) -> Wi-Fi {ROBOT_SSID}")
     if not 1 <= a.duration <= 120:
         sys.exit("--duration 1..120")
 

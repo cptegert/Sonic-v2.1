@@ -55,6 +55,7 @@ def main():
     ap.add_argument("--repeat", type=int, default=2)
     ap.add_argument("--duration", type=int, default=40)
     ap.add_argument("--pause", type=int, default=15, help="seconds between runs")
+    ap.add_argument("--robot", choices=["sonic", "shadow", "auto"], default="auto")
     a = ap.parse_args()
     configs = [parse_config(c) for c in a.config]
     order = [c for _ in range(a.repeat) for c in configs]
@@ -68,7 +69,7 @@ def main():
     for n, cfg in enumerate(order, 1):
         idx = configs.index(cfg)
         print(f"\n=== run {n}/{len(order)}: {label(cfg)} ===", flush=True)
-        cmd = [sys.executable, os.path.join(HERE, "auto_run.py"), "--no-wifi-switch",
+        cmd = [sys.executable, os.path.join(HERE, "auto_run.py"), "--no-wifi-switch", "--robot", a.robot,
                "--duration", str(a.duration)]
         for k, v in cfg.items():
             cmd += ["--" + k, str(v)]
