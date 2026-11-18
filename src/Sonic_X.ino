@@ -12,6 +12,7 @@
 #include "logger.h"  // black-box / crash logging
 #include "wifi_log.h"  // Wi-Fi live log for laptop
 #include "battery.h"   // battery voltage on GPIO 34
+#include <driver/gpio.h>  // pintest
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
 bool remoteCommand(const char *cmd, bool driving, Print &out);
@@ -474,9 +475,42 @@ static void printParams(Print &out) {
              RemoteXY.FIVE_SEC_WAIT, remoteRun, battery_volts());
 }
 
+// "pintest <gpio>": electrical check of an output pin (e.g. an XSHUT line).
+// Drives it low/high and reads the pad back, then checks what the wire does with
+// only a weak pull-up / pull-down. Restores HIGH afterwards (XSHUT = sensor on).
+static void pinTest(int pin, Print &out) {
+  gpio_num_t g = (gpio_num_t)pin;
+  gpio_set_direction(g, GPIO_MODE_INPUT_OUTPUT);
+  gpio_set_level(g, 0); delayMicroseconds(200); int low = gpio_get_level(g);
+  gpio_set_level(g, 1); delayMicroseconds(200); int high = gpio_get_level(g);
+  pinMode(pin, INPUT_PULLUP);   delay(2); int pu = digitalRead(pin);
+  pinMode(pin, INPUT_PULLDOWN); delay(2); int pd = digitalRead(pin);
+  pinMode(pin, OUTPUT); digitalWrite(pin, HIGH);
+  out.printf("pintest GPIO%d: drive LOW->%d, drive HIGH->%d | weak pull-up->%d, weak pull-down->%d\n",
+             pin, low, high, pu, pd);
+  if (low != 0 || high != 1)
+    out.println("  -> pin does NOT follow when driven: short to GND/VIN on the wire, or damaged pin");
+  else if (pu == 1 && pd == 0)
+    out.println("  -> pin OK, nothing pulls the wire (no sensor, or sensor XSHUT has no pull resistor)");
+  else if (pu == 1 && pd == 1)
+    out.println("  -> pin OK, the wire is pulled HIGH (normal: sensor board pull-up on XSHUT)");
+  else if (pu == 0 && pd == 0)
+    out.println("  -> pin OK when driven, but the wire is pulled LOW (pull-down on the sensor board, or weak short to GND)");
+  else
+    out.println("  -> unusual, check the wiring");
+  logEvent("pintest GPIO%d: L%d H%d pu%d pd%d", pin, low, high, pu, pd);
+}
+
 bool remoteCommand(const char *cmd, bool driving, Print &out) {
   char name[8];
   float value;
+  int pinNo;
+  if (sscanf(cmd, "pintest %d", &pinNo) == 1) {
+    if (driving) { out.println("Not while driving"); return true; }
+    if (pinNo < 0 || pinNo > 33) { out.println("pintest 0..33 (34-39 are input-only)"); return true; }
+    pinTest(pinNo, out);
+    return true;
+  }
   if (strcmp(cmd, "params") == 0) {
     printParams(out);
     return true;
