@@ -3,6 +3,7 @@
 #include <Preferences.h>
 
 static float calFactor = 1.0f;   // measured / computed, stored with "batcal"
+static bool enabled = true;      // "battery off" for a robot without the divider (saved)
 static float filtered = 0.0f;    // volts, low-pass filtered
 static uint32_t lastPinMv = 0;
 static uint32_t lastSampleMs = 0;
@@ -23,7 +24,13 @@ void battery_begin() {
   Preferences p;
   p.begin("battery", true);
   calFactor = p.getFloat("cal", 1.0f);
+  enabled = p.getBool("enabled", true);
   p.end();
+  if (!enabled) {
+    filtered = 0.0f;
+    logEvent("battery measurement OFF (no divider on this robot)");
+    return;
+  }
   if (calFactor < 0.8f || calFactor > 1.2f) calFactor = 1.0f;  // sanity
   lastPinMv = samplePinMv();
   filtered = pinToBattery(lastPinMv);
@@ -32,6 +39,7 @@ void battery_begin() {
 }
 
 void battery_loop() {
+  if (!enabled) return;
   uint32_t now = millis();
   if (now - lastSampleMs < 100) return;
   lastSampleMs = now;
@@ -61,13 +69,26 @@ void battery_loop() {
 }
 
 float battery_volts() { return battery_present() ? filtered : 0.0f; }
-bool battery_present() { return filtered > BATTERY_PRESENT_V; }
+bool battery_present() { return enabled && filtered > BATTERY_PRESENT_V; }
 bool battery_low() { return battery_present() && filtered < BATTERY_LOW_V; }
 bool battery_critical() { return battery_present() && filtered < BATTERY_CRITICAL_V; }
 
 bool batteryCommand(const char *cmd, Print &out) {
   float measured;
+  if (strcmp(cmd, "battery off") == 0 || strcmp(cmd, "battery on") == 0) {
+    enabled = (cmd[9] == 'n');
+    Preferences p;
+    p.begin("battery", false);
+    p.putBool("enabled", enabled);
+    p.end();
+    filtered = 0.0f;
+    if (enabled) { lastPinMv = samplePinMv(); filtered = pinToBattery(lastPinMv); }
+    logEvent("battery measurement %s (saved)", enabled ? "ON" : "OFF");
+    out.printf("battery measurement %s (saved on this robot)\n", enabled ? "ON" : "OFF");
+    return true;
+  }
   if (strcmp(cmd, "battery") == 0) {
+    if (!enabled) { out.println("battery: measurement OFF on this robot (battery on = enable)"); return true; }
     out.printf("battery: %.2f V (%.2f V/cell)  pin=%lu mV  cal=%.4f  %s\n",
                filtered, filtered / 3, (unsigned long)lastPinMv, calFactor,
                !battery_present() ? "NOT PRESENT (USB only?)" : battery_critical() ? "CRITICAL"

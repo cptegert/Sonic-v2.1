@@ -231,9 +231,13 @@ void read_Distance_Sensors(int distances[]) {
     // Update middle sensor signal rate for display
     middle_signal_rate = tempSignalRate;
 
-    // Health: how many working sensors failed this cycle
+    // Health: how many enabled sensors are failing this cycle. A sensor that failed
+    // to (re)initialise counts as failing too - otherwise "0 sensors working" looked
+    // healthy (2026-11-18: whole bus dead after a wiring mistake -> "sensors OK again").
     failingCount = 0;
-    for (int i = 0; i < 7; i++) if (sensorOk[i] && failingNow[i]) failingCount++;
+    for (int i = 0; i < 7; i++) {
+        if (sensorEnabled[i] && (!sensorOk[i] || failingNow[i])) failingCount++;
+    }
     badLoops = (failingCount >= SENSOR_BLIND_MIN_FAILING) ? badLoops + 1 : 0;
 
 #if SENSOR_MAX_RISE_CM > 0

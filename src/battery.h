@@ -5,6 +5,8 @@
 //                                          +--------- GPIO 34 (ADC1, input only)
 // 12.6 V (full) -> ~1.37 V at the pin, 9 V -> ~0.98 V.
 // Calibrate once against a multimeter / LiPo checker:  batcal <measured volts>
+// Robot without the divider:  battery off  (saved; GPIO 34 floats otherwise and
+// reads random voltages -> false LOW/CRITICAL, refused remote starts).  battery on
 // -----------------------------------------------------------------------------
 #ifndef BATTERY_H
 #define BATTERY_H
@@ -24,6 +26,6 @@ float battery_volts();                  // filtered battery voltage (0 if not pr
 bool battery_present();
 bool battery_low();                     // below BATTERY_LOW_V (and present)
 bool battery_critical();                // below BATTERY_CRITICAL_V (and present)
-bool batteryCommand(const char *cmd, Print &out);  // "battery", "batcal <V>"
+bool batteryCommand(const char *cmd, Print &out);  // "battery", "batcal <V>", "battery on|off"
 
 #endif

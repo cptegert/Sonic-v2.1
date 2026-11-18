@@ -556,6 +556,7 @@ bool sensorFailsafe() {
   static bool blind = false;
   static int healthyLoops = 0;
   static uint32_t lastRecoveryMs = 0;
+  static uint32_t recoveryIntervalMs = 1000;  // 5 s after a recovery that did not help
   static uint32_t blindSinceMs = 0;
 
   if (sensors_blind()) {
@@ -577,12 +578,14 @@ bool sensorFailsafe() {
     motor.writeMicroseconds(1500);  // before the recovery blocks the loop
     servo.writeMicroseconds(1500);
     final_speed = 1500;
-    if (millis() - lastRecoveryMs > 1000) {
+    if (millis() - lastRecoveryMs > recoveryIntervalMs) {
       lastRecoveryMs = millis();
       logStage(STAGE_SENSOR_M);  // if recovery itself hangs, the watchdog log shows a sensor stage
       uint32_t t = millis();
       int ok = sensors_recover();
       logEvent("I2C bus recovery: %d sensors OK (%lu ms)", ok, (unsigned long)(millis() - t));
+      // Several sensors still dead (wiring?): retry less often, each try blocks ~0.3 s per dead sensor
+      recoveryIntervalMs = (ok >= 6) ? 1000 : 5000;
     }
   }
   return blind;
