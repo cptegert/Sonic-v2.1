@@ -202,6 +202,12 @@ void loop() {
   unsigned long cycleStartTime = micros();
   logStage(STAGE_REMOTEXY);
   RemoteXYEngine.handler ();
+  // Who switches? The button and remote commands log themselves; a change right
+  // after the RemoteXY handler came from the phone app.
+  static uint8_t switchAfterLastLoop = 0;
+  if (RemoteXY.Start_switch != switchAfterLastLoop) {
+    logEvent("app: main switch %s", RemoteXY.Start_switch ? "ON" : "OFF");
+  }
   battery_loop();
   read_Distance_Sensors(distances);  // sets STAGE_SENSOR_* itself
   bool sensorsBlind = sensorFailsafe();  // I2C bus dead -> motor neutral + bus recovery
@@ -408,6 +414,7 @@ void loop() {
   snap.reversing = reversing;
   snap.battCv = (uint16_t)(battery_volts() * 100);
   logger_loop(snap);
+  switchAfterLastLoop = RemoteXY.Start_switch;
   sendTelemetry(driving, cycleTimeMs);
   logStage(STAGE_LOOP_END);
 }

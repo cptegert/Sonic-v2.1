@@ -369,6 +369,9 @@ void logger_loop(const LogSnapshot &s) {
     if (s.startSwitch != prev.startSwitch) logEvent("main switch %s", s.startSwitch ? "ON" : "OFF");
     if (s.manual != prev.manual)           logEvent("mode -> %s", s.manual ? "manual" : "autonomous");
     if (s.driving != prev.driving)         logEvent(s.driving ? "driving started" : "driving stopped");
+    // Start/stop events go to flash at once: a power-off right after a stop must not
+    // erase why it stopped (2026-11-18: a stop 5 s into a drive left no trace)
+    if (s.driving != prev.driving || s.startSwitch != prev.startSwitch) flushEvents(bootNo);
     if (s.reversing != prev.reversing)     logEvent(s.reversing ? "reversing" : "reverse done");
   }
   first = false;
