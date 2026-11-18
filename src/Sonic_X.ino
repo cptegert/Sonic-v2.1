@@ -203,6 +203,7 @@ void loop() {
   battery_loop();
   read_Distance_Sensors(distances);  // sets STAGE_SENSOR_* itself
   bool sensorsBlind = sensorFailsafe();  // I2C bus dead -> motor neutral + bus recovery
+  if (!sensorsBlind) sensors_maintain(RemoteXY.Start_switch == 1);  // single lost sensor -> re-init
 
   // debugSensors();
   

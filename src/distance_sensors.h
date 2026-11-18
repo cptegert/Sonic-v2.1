@@ -134,6 +134,10 @@ void i2cScan(Print &out);  // "scan" command
 #define SENSOR_BLIND_LOOPS       3
 bool sensors_blind();
 int sensors_failing();          // sensors failing in the last read cycle
-int sensors_recover();          // reset I2C bus + re-init all sensors, returns sensors OK  // "on M" / "off FFL" / "on all"
+int sensors_recover();          // reset I2C bus + re-init all sensors, returns sensors OK
+// Single lost sensor (e.g. reset by a power blip -> back at the default address 0x29):
+// re-initialise it on its own. Call every loop when not blind. While driving it only
+// acts if the sensor answers at 0x29 (re-init ~30 ms), never blocks for a missing one.
+void sensors_maintain(bool driving);  // "on M" / "off FFL" / "on all"
 
 #endif

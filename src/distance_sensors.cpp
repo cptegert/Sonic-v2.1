@@ -483,3 +483,44 @@ int sensors_recover() {
     failingCount = 0;
     return ok;
 }
+
+void sensors_maintain(bool driving) {
+    static uint32_t failSince[7] = {0, 0, 0, 0, 0, 0, 0};
+    static uint32_t lastTry[7] = {0, 0, 0, 0, 0, 0, 0};
+    uint32_t now = millis();
+    int bad = -1;
+    for (int i = 0; i < 7; i++) {
+        bool failing = sensorEnabled[i] && (!sensorOk[i] || failingNow[i]);
+        if (!failing) { failSince[i] = 0; continue; }
+        if (failSince[i] == 0) failSince[i] = now;
+        if (bad >= 0) return;  // more than one failing: leave it to the full bus recovery
+        bad = i;
+    }
+    if (bad < 0) return;
+    int i = bad;
+    if (now - failSince[i] < 500) return;                       // short glitch, wait
+    if (now - lastTry[i] < (sensorOk[i] ? 1000u : 5000u)) return;
+
+    Wire.beginTransmission(0x29);                               // reset sensor waiting here?
+    bool atDefault = (Wire.endTransmission() == 0);
+    if (driving && !atDefault) return;                          // missing: do not block while driving
+    lastTry[i] = now;
+
+    VL53L1X *objs[7] = {&sensorFarFarLeft, &sensorFarLeft, &sensorLeft, &sensorMiddle,
+                        &sensorRight, &sensorFarRight, &sensorFarFarRight};
+    const int xshut[7] = {XSHUT_FAR_FAR_LEFT, XSHUT_FAR_LEFT, XSHUT_LEFT, XSHUT_MIDDLE,
+                          XSHUT_RIGHT, XSHUT_FAR_RIGHT, XSHUT_FAR_FAR_RIGHT};
+    const uint8_t addr[7] = {ADDRESS_FAR_FAR_LEFT, ADDRESS_FAR_LEFT, ADDRESS_LEFT, ADDRESS_MIDDLE,
+                             ADDRESS_RIGHT, ADDRESS_FAR_RIGHT, ADDRESS_FAR_FAR_RIGHT};
+    digitalWrite(xshut[i], LOW);
+    delay(2);
+    *objs[i] = VL53L1X();
+    uint32_t t = millis();
+    sensorOk[i] = initSensor(*objs[i], xshut[i], addr[i]);
+    if (sensorOk[i] && sensorLaserOff[i]) { objs[i]->stopContinuous(); sensorOk[i] = false; }
+    lastDistance[i] = maxDistance;
+    lastNewDataMs[i] = millis();
+    failSince[i] = 0;
+    logEvent("sensor %s re-init %s (%lu ms%s)", SENSOR_NAMES[i], sensorOk[i] ? "OK" : "FAILED",
+             (unsigned long)(millis() - t), atDefault ? ", was at 0x29" : "");
+}
