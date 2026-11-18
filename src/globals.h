@@ -3,6 +3,10 @@
 #include <cstdint> // Ensure uint8_t and int8_t are defined
 #include <ESP32Servo.h>
 
+  // All motor (ESC) commands go through this: applies the per-robot MOTOR_SCALE
+  // (robot_config.h) and is skipped while a "motor" test command runs.
+  void motorWrite(int us);
+
   extern uint8_t manual_mode_switch; // =1 if switch ON and =0 if OFF, from 0 to 1
   extern uint8_t Start_switch; // =1 if switch ON and =0 if OFF, from 0 to 1
   extern float kp;

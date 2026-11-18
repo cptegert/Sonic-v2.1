@@ -77,7 +77,7 @@ void autonomous_mode() {
     // Motor reverse (adjust if ESC uses different reverse signal)
     // Reverse speed = 80% of limited maximum speed
     final_speed = 1500 - (speed_limit * 5) * 0.8;
-    motor.writeMicroseconds(final_speed);
+    motorWrite(final_speed);
 
     // --- Controlled steering based on sensor closeness ---
     // Steer away from the closer obstacle while reversing
@@ -268,7 +268,7 @@ void autonomous_mode() {
   float min_speed_pwm = 1500 + (min_speed * 5); // Convert min_speed (0-100) to PWM (1500-2000)
   final_speed = constrain(final_speed, min_speed_pwm, 2000);
 
-  motor.writeMicroseconds(final_speed);
+  motorWrite(final_speed);
   pidTel.steerUs = steer_output;
   pidTel.speedUs = final_speed;
   pidTel.steerMult = speed_multiplier;

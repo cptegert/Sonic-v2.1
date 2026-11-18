@@ -13,11 +13,13 @@
 #include "wifi_log.h"  // Wi-Fi live log for laptop
 #include "battery.h"   // battery voltage on GPIO 34
 #include <driver/gpio.h>  // pintest
+#include "robot_config.h"  // MOTOR_SCALE
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
 bool remoteCommand(const char *cmd, bool driving, Print &out);
 void remoteRunWatchdog();
 bool sensorFailsafe();
+static bool motorTestCommand(const char *cmd, Print &out);
 
 
 Preferences preferences;
@@ -292,7 +294,7 @@ void loop() {
       // Sensors dead: do NOT drive blind. Motor neutral (already set by the
       // failsafe), LED red. Driving continues by itself once sensors are back.
       driving = true;
-      motor.writeMicroseconds(1500);
+      motorWrite(1500);
       servo.writeMicroseconds(1500);
       final_speed = 1500;
       setStatusLed(pixel.Color(255, 0, 0));
@@ -313,7 +315,7 @@ void loop() {
   } else{
     waitingForStart = false; // Reset the waiting flag
     startedByButton = false; // next start (app or button) decides its own delay
-    motor.writeMicroseconds(1500);
+    motorWrite(1500);
     servo.writeMicroseconds(1500);
     // Button held while stopped = waiting for the starting whistle
     // Otherwise dim white = ready, or orange = ready but last reset was abnormal
@@ -506,6 +508,7 @@ bool remoteCommand(const char *cmd, bool driving, Print &out) {
   char name[8];
   float value;
   int pinNo;
+  if (motorTestCommand(cmd, out)) return true;
   if (sscanf(cmd, "pintest %d", &pinNo) == 1) {
     if (driving) { out.println("Not while driving"); return true; }
     if (pinNo < 0 || pinNo > 33) { out.println("pintest 0..33 (34-39 are input-only)"); return true; }
@@ -610,7 +613,7 @@ bool sensorFailsafe() {
   }
 
   if (blind) {
-    motor.writeMicroseconds(1500);  // before the recovery blocks the loop
+    motorWrite(1500);  // before the recovery blocks the loop
     servo.writeMicroseconds(1500);
     final_speed = 1500;
     if (millis() - lastRecoveryMs > recoveryIntervalMs) {
@@ -624,4 +627,43 @@ bool sensorFailsafe() {
     }
   }
   return blind;
+}
+
+// ============================================================================
+// MOTOR OUTPUT (per-robot scale) + "motor <us> <seconds>" ESC test
+// ============================================================================
+static int motorTestUs = 1500;
+static uint32_t motorTestUntil = 0;
+
+static bool motorTestActive() {
+  return motorTestUntil != 0 && (int32_t)(millis() - motorTestUntil) < 0;
+}
+
+void motorWrite(int us) {
+  if (motorTestActive()) {
+    motor.writeMicroseconds(motorTestUs);  // raw, unscaled: measures the ESC itself
+    return;
+  }
+  if (motorTestUntil != 0) {  // test just ended
+    motorTestUntil = 0;
+    logEvent("motor test end");
+  }
+  int out = 1500 + (int)lroundf((us - 1500) * MOTOR_SCALE);
+  motor.writeMicroseconds(constrain(out, 1000, 2000));
+}
+
+// Called from remoteCommand: "motor 1550 2" = 1550 us raw for 2 s (wheels off the
+// ground!). Only with the main switch OFF; max 3 s; always back to neutral.
+static bool motorTestCommand(const char *cmd, Print &out) {
+  int us;
+  float secs;
+  if (sscanf(cmd, "motor %d %f", &us, &secs) != 2) return false;
+  if (RemoteXY.Start_switch) { out.println("motor test: main switch must be OFF"); return true; }
+  if (us < 1000 || us > 2000 || secs <= 0 || secs > 3) { out.println("motor <1000..2000 us> <0.1..3 s>"); return true; }
+  motorTestUs = us;
+  motorTestUntil = millis() + (uint32_t)(secs * 1000);
+  motor.writeMicroseconds(us);
+  logEvent("motor test %d us for %.1f s (raw, scale %.2f not applied)", us, secs, (double)MOTOR_SCALE);
+  out.printf("motor test: %d us for %.1f s (wheels off the ground!)\n", us, secs);
+  return true;
 }
