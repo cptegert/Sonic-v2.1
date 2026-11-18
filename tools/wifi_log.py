@@ -48,14 +48,19 @@ class Recorder:
     """Writes telemetry rows (T,...) to one CSV file per run (TH,<run>,<header>)."""
     def __init__(self):
         self.run = None
+        self.last_t = None
         self.file = None
         self.rows = 0
         self.path = None
 
     def header(self, line):
         _, run, header = line.split(",", 2)
-        if run == self.run:
+        if run == self.run and self.file is not None:
             return  # repeated header of the same run
+        self._open(run, header)
+
+    def _open(self, run, header):
+        self.header_line = header
         if self.file:
             self.file.close()
         self.run = run
@@ -68,6 +73,20 @@ class Recorder:
     def row(self, line):
         if not self.file:
             return  # header not seen yet (comes within 2 s)
+        try:
+            t = float(line[2:].split(",", 1)[0])
+        except ValueError:
+            return
+        if self.last_t is not None and t < self.last_t - 1000:
+            # robot time went backwards = the robot restarted: its run numbers start
+            # again at 1, so start a new file instead of appending to the old one
+            rx.put(("line", time.strftime("%H:%M:%S ") + "# robot restarted -> new recording file"))
+            self.file.close()
+            self.file = None
+            self.run = None
+            self.last_t = None
+            return
+        self.last_t = t
         self.file.write(line[2:] + "\n")
         self.rows += 1
         if self.rows % 25 == 0:

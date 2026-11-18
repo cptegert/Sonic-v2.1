@@ -3,6 +3,7 @@
 
 WHEELS OFF THE GROUND. Battery on, USB unplugged, main switch OFF.
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/motor_sweep.py --robot shadow
+  ... --steps 1700,1720,1740,1760,1780,1800      (own values; below 1500 = reverse)
 
 Joins the robot's Wi-Fi, then sends fixed motor signals (raw, not scaled), each
 for 2 s with a 2 s pause, and prints which step is running. Note:
@@ -44,7 +45,11 @@ def main():
         robots = {k: v for k, v in json.load(f).items() if not k.startswith("_")}
     ap = argparse.ArgumentParser()
     ap.add_argument("--robot", choices=sorted(robots), required=True)
+    ap.add_argument("--steps", help="comma separated us values, e.g. 1700,1720,1740 (default 1520..1800)")
     a = ap.parse_args()
+    steps = [int(x) for x in a.steps.split(",")] if a.steps else STEPS
+    if any(not 1000 <= x <= 2000 for x in steps):
+        sys.exit("steps must be 1000..2000 us")
     ssid = robots[a.robot]["ssid"]
     home = active_wifi()
 
@@ -68,13 +73,19 @@ def main():
 
     try:
         print(f"Joining {ssid} ...", flush=True)
-        for _ in range(5):
+        rc, out = 1, ""
+        for attempt in range(6):
             nmcli("dev", "wifi", "rescan")
-            time.sleep(3)
+            time.sleep(4)
             rc, out = nmcli("dev", "wifi", "connect", ssid, "password", PASSWORD)
             if rc == 0:
                 break
-        else:
+            rc2, out2 = nmcli("connection", "up", "id", ssid)  # saved profile
+            if rc2 == 0:
+                rc, out = 0, out2
+                break
+            print(f"  attempt {attempt + 1}: {out}", flush=True)
+        if rc != 0:
             sys.exit(f"Could not join {ssid}: {out}  (robot on? battery on?)")
         params = None
         for _ in range(10):
@@ -89,9 +100,9 @@ def main():
             sys.exit("Main switch is ON - switch it OFF in the app first")
         print("\nStarting in 5 s - WHEELS OFF THE GROUND\n", flush=True)
         time.sleep(5)
-        for n, us in enumerate(STEPS, 1):
+        for n, us in enumerate(steps, 1):
             r = ask(f"motor {us} {ON_S}", "motor test:")
-            print(f"  >>> STEP {n}/{len(STEPS)}:  {us} us  (motor ON for {ON_S:.0f} s)"
+            print(f"  >>> STEP {n}/{len(steps)}:  {us} us  (motor ON for {ON_S:.0f} s)"
                   + ("" if r else "   [no reply from robot!]"), flush=True)
             time.sleep(ON_S)
             print("      pause", flush=True)
