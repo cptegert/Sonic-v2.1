@@ -43,17 +43,53 @@ static void startAp() {
   WiFi.setSleep(false);
 }
 
-static void restartAp(const char *why) {
-  lastRestartMs = millis();
-  logEvent("Wi-Fi AP restart (%s), heap=%lu", why, (unsigned long)ESP.getFreeHeap());
+// The AP restart runs in its own task on core 0 (where Wi-Fi lives), never in the
+// loop: 2026-11-20 a restart while driving hung inside the Wi-Fi driver for > 5 s,
+// the loop watchdog reset the robot and it stopped. While it runs, the loop skips
+// all Wi-Fi work and keeps driving.
+static volatile bool restartRunning = false;
+static volatile uint32_t restartTookMs = 0;      // set by the task when done
+static uint32_t restartStartMs = 0;
+static bool restartSlowLogged = false;
+
+static void apRestartTask(void *) {
+  uint32_t t = millis();
   WiFi.softAPdisconnect(true);
-  delay(50);
+  vTaskDelay(pdMS_TO_TICKS(50));
   WiFi.mode(WIFI_AP);
   startAp();
+  restartTookMs = millis() - t;
+  restartRunning = false;
+  vTaskDelete(NULL);
+}
+
+static void restartAp(const char *why) {
+  if (restartRunning) return;
+  lastRestartMs = millis();
+  restartStartMs = lastRestartMs;
+  restartSlowLogged = false;
+  restartTookMs = 0;
+  logEvent("Wi-Fi AP restart (%s), heap=%lu", why, (unsigned long)ESP.getFreeHeap());
+  restartRunning = true;
+  if (xTaskCreatePinnedToCore(apRestartTask, "ap_restart", 4096, nullptr, 1, nullptr, 0) != pdPASS) {
+    restartRunning = false;
+    logEvent("Wi-Fi AP restart task could not start");
+  }
 }
 
 // Called from the loop: log Wi-Fi events, keep the access point alive
 static void wifiHousekeeping() {
+  if (restartRunning) {
+    if (!restartSlowLogged && millis() - restartStartMs > 10000) {
+      restartSlowLogged = true;
+      logEvent("Wi-Fi AP restart still running after 10 s (driver stuck?) - loop keeps driving");
+    }
+    return;
+  }
+  if (restartTookMs) {
+    logEvent("Wi-Fi AP restart done in %lu ms", (unsigned long)restartTookMs);
+    restartTookMs = 0;
+  }
   if (evStaConnected != seenStaConnected) {
     seenStaConnected = evStaConnected;
     logEvent("Wi-Fi: laptop/station joined (%d connected)", WiFi.softAPgetStationNum());
@@ -101,7 +137,7 @@ class UdpPrinter : public Print {
   }
   void flush() override {
     if (len == 0) return;
-    if (wifiLog_hasViewer()) {
+    if (!restartRunning && wifiLog_hasViewer()) {
       // Only used for command output while stopped (e.g. "log"). Sending fast fills
       // the Wi-Fi buffers and the heap (LOW HEAP 13 KB seen) -> small packets, pace
       // them, and wait while memory is low.
@@ -145,7 +181,7 @@ uint32_t wifiLog_msSinceViewer() {
 }
 
 void wifiLog_send(const char *line) {
-  if (!wifiLog_hasViewer()) return;
+  if (restartRunning || !wifiLog_hasViewer()) return;
   udp.beginPacket(viewerIp, viewerPort);
   udp.write((const uint8_t *)line, strlen(line));
   udp.write('\n');
@@ -155,6 +191,7 @@ void wifiLog_send(const char *line) {
 const char *wifiLog_poll() {
   if (!started) return nullptr;
   wifiHousekeeping();
+  if (restartRunning) return nullptr;
   int n = udp.parsePacket();
   if (n <= 0) return nullptr;
   int len = udp.read(cmdBuf, sizeof(cmdBuf) - 1);
