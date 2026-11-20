@@ -17,6 +17,13 @@ extern const int SERVO_MIN_US;
 extern const int SERVO_CENTER_US;
 extern const int SERVO_MAX_US;
 
+// Soft reversal (see autonomousDriving.cpp): neutral pause, ramped reverse at
+// REVERSE_POWER of the max speed, neutral pause, then forward again.
+#define REVERSE_PAUSE_MS      150    // neutral before reversing
+#define REVERSE_RAMP_MS       200    // ramp from neutral to full reverse power
+#define REVERSE_POWER         0.5f   // reverse power, fraction of max speed (was 0.8)
+#define REVERSE_END_PAUSE_MS  100    // neutral before driving forward again
+
 // Snapshot of the controller's internals from the last autonomous_mode() call,
 // for the Wi-Fi telemetry recorder (PID tuning). Read-only copy, no effect on driving.
 struct PidTelemetry {

@@ -74,9 +74,22 @@ void autonomous_mode() {
   // ===================================================================================
   //3. Insert this BEFORE your PID logic (When reversing, skip your forward logic entirely)
   if (reversing) {
-    // Motor reverse (adjust if ESC uses different reverse signal)
-    // Reverse speed = 80% of limited maximum speed
-    final_speed = 1500 - (speed_limit * 5) * 0.8;
+    // Soft reversal (2026-11-20): switching a spinning brushed motor straight from
+    // forward to strong reverse drew a current spike that collapsed Shadow's supply
+    // (radio crash / restart / total power loss, nearly always right after a
+    // reverse). Now: neutral pause -> ramp up to a lower reverse power -> neutral
+    // pause -> forward again. The reversing time itself stays REVERSE_DURATION_MS.
+    uint32_t inReverse = millis() - reverseStart;
+    float reverseTarget = 1500 - (speed_limit * 5) * REVERSE_POWER;
+    if (inReverse < REVERSE_PAUSE_MS) {
+      final_speed = 1500;                                   // 1. let the motor slow down
+    } else if (inReverse < REVERSE_PAUSE_MS + REVERSE_DURATION_MS) {
+      float ramp = (inReverse - REVERSE_PAUSE_MS) / (float)REVERSE_RAMP_MS;
+      if (ramp > 1.0f) ramp = 1.0f;
+      final_speed = 1500 + (reverseTarget - 1500) * ramp;  // 2. ramped reverse
+    } else {
+      final_speed = 1500;                                   // 3. stop before going forward
+    }
     motorWrite(final_speed);
 
     // --- Controlled steering based on sensor closeness ---
@@ -96,8 +109,8 @@ void autonomous_mode() {
     pidTel.steerUs = reverseSteer;
     pidTel.speedUs = final_speed;
 
-    // End reversing after duration
-    if (millis() - reverseStart > REVERSE_DURATION_MS) {
+    // End reversing after pause + duration + end pause
+    if (inReverse > (uint32_t)(REVERSE_PAUSE_MS + REVERSE_DURATION_MS + REVERSE_END_PAUSE_MS)) {
         reversing = false;
         // Reset PID state when exiting reverse mode to prevent steering jerk
         integral = 0.0;
