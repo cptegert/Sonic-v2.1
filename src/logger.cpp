@@ -232,7 +232,7 @@ void logger_begin() {
 }
 
 void logger_setupDone() {
-  enableLoopWDT();  // loop() stuck >5 s -> reset, logged as TASK WATCHDOG with the stuck stage
+  // the loop watchdog is already enabled early in setup() (Sonic_X.ino)
   logEvent("setup done, heap=%lu", (unsigned long)ESP.getFreeHeap());
 }
 

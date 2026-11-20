@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <VL53L1X.h>
 #include "logger.h"
+#include <esp_task_wdt.h>
 
 // ============================================================================
 // SENSOR OBJECTS
@@ -134,11 +135,16 @@ void initialize_Distance_Sensors() {
 bool initSensor(VL53L1X &sensor, int xshutPin, uint8_t newAddress) {
     digitalWrite(xshutPin, HIGH);
     delay(10);
+    // The library's default timeout is 0 = wait FOREVER for the sensor to boot.
+    // 2026-11-19: after a supply collapse a half-powered sensor never booted and
+    // the restart hung here for good (robot dead until power-off).
+    sensor.setTimeout(100);
 
     // Retry initialization up to 3 times
     int retries = 3;
     bool success = false;
     while (retries > 0 && !success) {
+        esp_task_wdt_reset();  // watchdog also runs during setup (see Sonic_X.ino)
         if (sensor.init()) {
             success = true;
             sensor.setAddress(newAddress);
@@ -460,6 +466,7 @@ int sensors_recover() {
     digitalWrite(SDA, HIGH); delayMicroseconds(5);
     Wire.begin();
     Wire.setClock(400000);
+    Wire.setTimeOut(20);  // ms: a stuck bus must not block the loop
 
     VL53L1X *objs[7] = {&sensorFarFarLeft, &sensorFarLeft, &sensorLeft, &sensorMiddle,
                         &sensorRight, &sensorFarRight, &sensorFarFarRight};

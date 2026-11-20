@@ -13,6 +13,7 @@
 #include "wifi_log.h"  // Wi-Fi live log for laptop
 #include "battery.h"   // battery voltage on GPIO 34
 #include <driver/gpio.h>  // pintest
+#include <esp_task_wdt.h>
 #include "robot_config.h"  // MOTOR_SCALE
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
@@ -104,9 +105,14 @@ void setup() {
   pixel.setBrightness(50); // Set brightness (0-255, 50 = moderate brightness)
   setStatusLed(pixel.Color(255, 0, 0));
   logger_begin();  // logs reset reason + previous session black box
+  // Watchdog from here on, not only in loop(): a hang during startup (e.g. a sensor
+  // that never boots after a supply dip) must restart the robot, not leave it dead.
+  // Long setup steps feed it (esp_task_wdt_reset).
+  enableLoopWDT();
   battery_begin();
 
   RemoteXY_Init (); 
+  esp_task_wdt_reset();
   wifiLog_begin();  // Wi-Fi access point for laptop live logs (BLE stays for RemoteXY)
 
   // Load saved settings from Preferences (EEPROM)
@@ -186,9 +192,13 @@ void setup() {
   Serial.println("Arming ESC (sending neutral 1500 µs)...");
   motor.writeMicroseconds(1500);
   servo.writeMicroseconds(1500);
+  esp_task_wdt_reset();
   RemoteXY_delay(500); // give ESC time to arm
+  esp_task_wdt_reset();
 
   Wire.begin();  // Initialize I2C
+  Wire.setTimeOut(20);   // ms: a stuck I2C bus must not block for long
+  esp_task_wdt_reset();
   Wire.setClock(400000); // use 400 kHz I2C, vl53l1x librarys oli, sellega anduri mõõtmised palju stabiilsemad
 
   initialize_Distance_Sensors();// Initialize distance sensors (if applicable)
