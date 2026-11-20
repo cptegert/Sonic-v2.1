@@ -152,11 +152,12 @@ static void formatSnapshot(char *buf, size_t len, const BlackBox &b) {
   const LogSnapshot &s = b.snap;
   snprintf(buf, len,
            "up=%.1fs loops=%lu stage=%s cyc=%ums max=%ums sw=%u drive=%u man=%u ble=%u rev=%u "
-           "spd=%d str=%d dist=[%d %d %d %d %d %d %d] bat=%.2fV heap=%lu heapMin=%lu i2cErr=%lu",
+           "spd=%d str=%d dist=[%d %d %d %d %d %d %d] bat=%.2fV heap=%lu heapMin=%lu i2cErr=%lu sta=%d viewer=%lus",
            b.uptimeMs / 1000.0, (unsigned long)b.loops, stageName(b.stage), s.cycleMs, b.maxCycleMs,
            s.startSwitch, s.driving, s.manual, s.connected, s.reversing, s.speedUs, s.steerUs,
            s.dist[0], s.dist[1], s.dist[2], s.dist[3], s.dist[4], s.dist[5], s.dist[6],
-           s.battCv / 100.0, (unsigned long)b.freeHeap, (unsigned long)b.minFreeHeap, (unsigned long)b.i2cErrors);
+           s.battCv / 100.0, (unsigned long)b.freeHeap, (unsigned long)b.minFreeHeap, (unsigned long)b.i2cErrors,
+           wifiLog_stations(), (unsigned long)min(wifiLog_msSinceViewer() / 1000, (uint32_t)9999));
 }
 
 static void logCoreDumpSummary() {

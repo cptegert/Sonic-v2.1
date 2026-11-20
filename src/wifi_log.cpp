@@ -78,13 +78,16 @@ static void wifiHousekeeping() {
     restartAp("AP not running");
     return;
   }
-  // Laptop was talking to us, then went silent and nobody is connected anymore:
-  // restart the AP once (cheap, ~0.1 s) in case it stopped beaconing silently.
+  // Laptop was talking to us, then went silent for 30 s: restart the AP once
+  // (~0.1 s). Do NOT require "no stations": 2026-11-20 the radio died while driving
+  // (Wi-Fi and BLE at the same moment), the program kept running and the dead
+  // laptop link still counted as a connected station, so the AP was never restarted.
   if (wifiLog_hasViewer()) hadViewer = true;
-  if (hadViewer && wifiLog_msSinceViewer() > 30000 && WiFi.softAPgetStationNum() == 0 &&
-      now - lastRestartMs > 60000) {
+  if (hadViewer && wifiLog_msSinceViewer() > 30000 && now - lastRestartMs > 60000) {
     hadViewer = false;
-    restartAp("viewer silent 30 s, no stations");
+    char why[64];
+    snprintf(why, sizeof(why), "viewer silent 30 s, %d station(s) listed", WiFi.softAPgetStationNum());
+    restartAp(why);
   }
 }
 
@@ -130,6 +133,10 @@ void wifiLog_begin() {
 
 bool wifiLog_hasViewer() {
   return started && viewerPort != 0 && (millis() - viewerLastSeenMs) < VIEWER_TIMEOUT_MS;
+}
+
+int wifiLog_stations() {
+  return started ? WiFi.softAPgetStationNum() : 0;
 }
 
 uint32_t wifiLog_msSinceViewer() {
@@ -179,6 +186,7 @@ void wifiLog_begin() {}
 void wifiLog_send(const char *) {}
 bool wifiLog_hasViewer() { return false; }
 uint32_t wifiLog_msSinceViewer() { return UINT32_MAX; }
+int wifiLog_stations() { return 0; }
 const char *wifiLog_poll() { return nullptr; }
 Print &wifiLog_printer() { return nullPrinter; }
 void wifiLog_flush() {}
