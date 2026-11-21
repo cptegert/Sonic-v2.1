@@ -51,6 +51,14 @@ After a name change the phone may still show the old Bluetooth name (cache):
 delete the robot in the app and scan again; if needed switch the phone's
 Bluetooth off and on.
 
+## Serial Monitor
+
+PlatformIO's Serial Monitor (plug icon in the status bar) opens in the terminal
+panel: click into it, type the command, press Enter. Typing is visible and the
+line is sent on Enter thanks to `monitor_echo` / `send_on_enter` in
+`platformio.ini` (needs the latest `git pull`).
+Opening the monitor restarts the robot; wait a few seconds until it has started.
+
 ## Useful serial commands (Serial Monitor, 115200)
 
 `name`, `params`, `sensors`, `scan`, `log`, `status`, `help`
