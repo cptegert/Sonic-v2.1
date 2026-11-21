@@ -11,7 +11,6 @@
 #include <Adafruit_NeoPixel.h>  // For addressable LED 
 #include "logger.h"  // black-box / crash logging
 #include "wifi_log.h"  // Wi-Fi live log for laptop
-#include "battery.h"   // battery voltage on GPIO 34
 #include <driver/gpio.h>  // pintest
 #include <esp_task_wdt.h>
 #include "robot_config.h"  // MOTOR_SCALE
@@ -109,7 +108,6 @@ void setup() {
   // that never boots after a supply dip) must restart the robot, not leave it dead.
   // Long setup steps feed it (esp_task_wdt_reset).
   enableLoopWDT();
-  battery_begin();
 
   RemoteXY_Init (); 
   esp_task_wdt_reset();
@@ -218,7 +216,6 @@ void loop() {
   if (RemoteXY.Start_switch != switchAfterLastLoop) {
     logEvent("app: main switch %s", RemoteXY.Start_switch ? "ON" : "OFF");
   }
-  battery_loop();
   read_Distance_Sensors(distances);  // sets STAGE_SENSOR_* itself
   bool sensorsBlind = sensorFailsafe();  // I2C bus dead -> motor neutral + bus recovery
   if (!sensorsBlind) sensors_maintain(RemoteXY.Start_switch == 1);  // single lost sensor -> re-init
@@ -422,7 +419,6 @@ void loop() {
   snap.driving = driving;
   snap.connected = RemoteXY.connect_flag;
   snap.reversing = reversing;
-  snap.battCv = (uint16_t)(battery_volts() * 100);
   logger_loop(snap);
   switchAfterLastLoop = RemoteXY.Start_switch;
   sendTelemetry(driving, cycleTimeMs);
@@ -436,7 +432,7 @@ void loop() {
 // ============================================================================
 static const char *TELEMETRY_HEADER =
   "t_ms,loop,cyc_ms,manual,rev,trapped,FFL,FL,L,M,R,FR,FFR,left,mid,right,"
-  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,batt_v";
+  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble";
 
 void sendTelemetry(bool driving, float cycleTimeMs) {
   static bool wasDriving = false;
@@ -459,7 +455,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
   const PidTelemetry &t = pidTel;
   snprintf(line, sizeof(line),
            "T,%lu,%lu,%.1f,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,"
-           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%.2f",
+           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u",
            (unsigned long)now, (unsigned long)loopNo++, cycleTimeMs, manual_mode_switch,
            t.reversing, t.trapped,
            distancesAll[0], distancesAll[1], distancesAll[2], distancesAll[3],
@@ -468,7 +464,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
            t.bias, t.error, t.pTerm, t.iTerm, t.dTerm, t.pid,
            manual_mode_switch ? steer_output : t.steerUs,
            manual_mode_switch ? final_speed : t.speedUs,
-           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, battery_volts());
+           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag);
   wifiLog_send(line);
 } 
 
@@ -489,10 +485,10 @@ static bool remoteRun = false;
 static uint32_t remoteRunEndMs = 0;
 
 static void printParams(Print &out) {
-  out.printf("params: robot=%s kp=%.2f ki=%.3f kd=%.2f speed=%.0f main_switch=%u manual=%u five_sec_bypass=%u remote_run=%u battery=%.2fV\n",
+  out.printf("params: robot=%s kp=%.2f ki=%.3f kd=%.2f speed=%.0f main_switch=%u manual=%u five_sec_bypass=%u remote_run=%u\n",
              ROBOT_NAME, RemoteXY.PID_P * 15.0 / 100.0, RemoteXY.PID_I * 0.1 / 100.0, RemoteXY.PID_D * 15.0 / 100.0,
              RemoteXY.MAX_SPEED, RemoteXY.Start_switch, RemoteXY.manual_mode_switch,
-             RemoteXY.FIVE_SEC_WAIT, remoteRun, battery_volts());
+             RemoteXY.FIVE_SEC_WAIT, remoteRun);
 }
 
 // "pintest <gpio>": electrical check of an output pin (e.g. an XSHUT line).
@@ -559,10 +555,6 @@ bool remoteCommand(const char *cmd, bool driving, Print &out) {
   if (sscanf(cmd, "start %d", &seconds) == 1) {
     if (RemoteXY.Start_switch) { out.println("Already ON"); return true; }
     if (RemoteXY.manual_mode_switch) { out.println("Manual mode is ON in the app - refusing"); return true; }
-    if (battery_critical()) {
-      out.printf("battery critical (%.2f V) - charge it - refusing\n", battery_volts());
-      return true;
-    }
     if (wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
       out.println("start needs a live Wi-Fi link (tools/auto_run.py keeps it alive) - refusing");
       return true;
@@ -589,10 +581,6 @@ void remoteRunWatchdog() {
     RemoteXY.Start_switch = 0;
     remoteRun = false;
     logEvent("remote run: time up, stopped");
-  } else if (battery_critical()) {
-    RemoteXY.Start_switch = 0;
-    remoteRun = false;
-    logEvent("remote run: battery critical (%.2f V), stopped", battery_volts());
   } else if (wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
     RemoteXY.Start_switch = 0;
     remoteRun = false;
