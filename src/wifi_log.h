@@ -16,7 +16,7 @@
 
 #define WIFI_LOG_ENABLED   1               // 0 = no Wi-Fi at all (e.g. if rules forbid it)
 #include "robot_config.h"
-#define WIFI_LOG_SSID      ROBOT_WIFI_SSID  // "<robot name>-log", see platformio.ini
+#define WIFI_LOG_SSID      robotWifiSsid()  // "<robot name>-log", from the stored identity
 #define WIFI_LOG_PASSWORD  "sonicx123"     // min 8 chars (WPA2)
 #define WIFI_LOG_CHANNEL   6
 #define WIFI_LOG_PORT      4210            // robot listens here, replies to the sender

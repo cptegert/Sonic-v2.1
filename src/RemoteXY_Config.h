@@ -30,7 +30,9 @@ extern Preferences preferences;
 
 // RemoteXY connection settings 
 #include "robot_config.h"
-#define REMOTEXY_BLUETOOTH_NAME ROBOT_BLE_NAME   // per robot, see robot_config.h / platformio.ini
+// Bluetooth name and GUI are chosen at runtime from the robot identity stored on
+// the board (robot_config.h): see robot_remotexy_init() in Sonic_X.ino.
+#define REMOTEXY_BLUETOOTH_NAME "Robot"   // unused (RemoteXY_Init macro not used)
 #define REMOTEXY_ACCESS_PASSWORD "EQ123"
 
 
@@ -54,13 +56,10 @@ extern Preferences preferences;
 
 
 
-// GUI byte array per robot (ROBOT_SHADOW from platformio.ini, env:shadow).
+// Both GUI byte arrays are in every firmware; the identity picks one at startup.
 // The struct below is shared: both GUIs use exactly the same variables.
-#if defined(ROBOT_SHADOW)
-#include "RemoteXY_GUI_Shadow.h"
-#else
 #include "RemoteXY_GUI_Sonic.h"
-#endif
+#include "RemoteXY_GUI_Shadow.h"
   
 // this structure defines all the variables and events of your control interface 
 struct {

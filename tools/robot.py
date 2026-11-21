@@ -5,6 +5,10 @@
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/robot.py upload
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/robot.py upload --robot shadow [--erase]
 
+One firmware for all robots (PlatformIO env "robot"); the robot identity (name,
+Bluetooth, GUI, motor scale) is stored on the board. After the upload this tool
+sets it ("name <robot>" over serial) if the board does not have it yet.
+
 Detection, in this order:
   1. ask the running firmware ("params" -> robot=<name>), without resetting it
   2. the board's MAC address (esptool; resets the board) against tools/robots.json
@@ -134,7 +138,7 @@ def main():
         save_robots(data)
         print(f"Board {mac} registered as {robots[target]['name']} in tools/robots.json")
 
-    env = robots[target]["env"]
+    env = robots[target].get("env", "robot")
     if a.erase:
         print("Erasing flash ...")
         subprocess.run([PIO, "run", "-d", PROJECT, "-e", env, "-t", "erase", "--upload-port", port], check=True)
@@ -145,6 +149,13 @@ def main():
     time.sleep(6)
     out = ask_firmware(port)
     m = re.search(r"params: robot=(\S+)", out)
+    if not (m and m.group(1) == robots[target]["name"]):
+        # One firmware for all robots: the identity is stored on the board. Set it.
+        print(f"Robot reports {m.group(1) if m else '?'} - storing identity '{target}' on the board ...")
+        ask_firmware(port, f"name {target}", timeout=1.5)
+        time.sleep(7)  # the robot restarts to apply it
+        out = ask_firmware(port)
+        m = re.search(r"params: robot=(\S+)", out)
     if m and m.group(1) == robots[target]["name"]:
         print(f"OK: robot answers as {m.group(1)}")
         print(re.search(r"params:.*", out).group(0))

@@ -3,7 +3,7 @@
 // stays in RemoteXY_Config.h. Moved here unchanged on 2026-11-21.
 #pragma once
 
-uint8_t const PROGMEM RemoteXY_CONF_PROGMEM[] =   // 1646 bytes V19 , PRO license required
+uint8_t const PROGMEM RemoteXY_GUI_SONIC[] =   // 1646 bytes V19 , PRO license required
   { 255,59,0,89,0,103,6,19,0,0,0,83,111,110,105,99,95,118,50,0,
   24,1,106,200,3,3,2,2,35,0,73,97,154,6,40,132,128,0,2,26,
   0,0,0,0,0,0,200,66,0,0,72,66,36,0,0,150,66,0,0,200,

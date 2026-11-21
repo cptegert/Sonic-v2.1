@@ -1,7 +1,7 @@
 {
-  "_comment": "Robots of this project. env = PlatformIO environment, macs = ESP32 boards (esptool MAC). tools/robot.py adds a board when you upload with --robot.",
+  "_comment": "Robots of this project (keep in sync with PROFILES in src/robot_config.cpp). One firmware (env robot); the identity is stored on the board. macs = known ESP32 boards; tools/robot.py adds a board when you upload with --robot.",
   "sonic": {
-    "env": "sonic",
+    "env": "robot",
     "name": "Sonic-X",
     "ssid": "Sonic-X-log",
     "macs": [
@@ -9,7 +9,7 @@
     ]
   },
   "shadow": {
-    "env": "shadow",
+    "env": "robot",
     "name": "Shadow",
     "ssid": "Shadow-log",
     "macs": [
@@ -17,7 +17,7 @@
     ]
   },
   "knuckles": {
-    "env": "knuckles",
+    "env": "robot",
     "name": "Knuckles",
     "ssid": "Knuckles-log",
     "macs": [

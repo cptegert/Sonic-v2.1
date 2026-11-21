@@ -1,24 +1,30 @@
-// Per-robot identity. ROBOT_NAME comes from platformio.ini (env:sonic / env:shadow).
+// Robot identity: ONE firmware for all robots, the identity is stored on the board.
+// -----------------------------------------------------------------------------
+// The profiles below (name, Bluetooth name, RemoteXY GUI, motor scale) are in every
+// firmware. The board's flash (NVS "robot"/"id") only says WHICH profile it is,
+// and survives firmware updates. Set it with:
+//   tools/robot.py upload --robot shadow      (does it automatically), or
+//   serial / Wi-Fi command:  name shadow       (saves and restarts)
+// A board without a stored identity starts as "Robot-xxxx" (last MAC bytes) with
+// Sonic's GUI, so it is always reachable (Wi-Fi "Robot-xxxx-log").
+// New robot: add a line to PROFILES in robot_config.cpp and to tools/robots.json.
+// -----------------------------------------------------------------------------
 #ifndef ROBOT_CONFIG_H
 #define ROBOT_CONFIG_H
 
-#ifndef ROBOT_NAME
-#define ROBOT_NAME "Sonic-X"   // build without an environment flag = Sonic
-#endif
+#include <Arduino.h>
 
-#define ROBOT_WIFI_SSID ROBOT_NAME "-log"   // e.g. "Sonic-X-log", "Shadow-log"
+enum RobotGui : uint8_t { GUI_SONIC = 0, GUI_SHADOW = 1 };
 
-// Bluetooth name shown in the RemoteXY app (default: ROBOT_NAME)
-#ifndef ROBOT_BLE_NAME
-#define ROBOT_BLE_NAME ROBOT_NAME
-#endif
-
-// Motor scale: different ESCs reach full speed at different signals. The driving
-// code thinks in Sonic's range (1500 neutral .. 2000 full forward); every motor
-// command is scaled around neutral: out = 1500 + (us - 1500) * MOTOR_SCALE.
-// Sonic's ESC = 1.0. Measure another ESC with the "motor <us> <s>" command.
-#ifndef MOTOR_SCALE
-#define MOTOR_SCALE 1.0f
-#endif
+void robot_identity_begin();          // FIRST thing in setup(): reads the stored identity
+const char *robotKey();               // "sonic" / "shadow" / "knuckles" / "" (none stored)
+const char *robotName();              // "Sonic-X", "Shadow", ... or "Robot-xxxx"
+const char *robotBleName();           // Bluetooth name in the RemoteXY app
+const char *robotWifiSsid();          // "<name>-log"
+RobotGui robotGui();                  // which RemoteXY GUI array
+float robotMotorScale();              // ESC scale around neutral (1.0 = Sonic's ESC)
+bool robotIdentityStored();           // false = default "Robot-xxxx"
+bool robotSetIdentity(const char *key);   // saves to flash; takes effect after restart
+void robotListProfiles(Print &out);
 
 #endif

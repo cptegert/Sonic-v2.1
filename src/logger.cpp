@@ -198,7 +198,7 @@ void logger_begin() {
   if (!fsOk) Serial.println("LOGGER: LittleFS mount failed, logging to Serial only");
 
   appendLine("", false);
-  appendf(true, "===== %s BOOT #%lu  reset reason: %s =====", ROBOT_NAME, (unsigned long)bootNo, resetReasonStr(reason));
+  appendf(true, "===== %s BOOT #%lu  reset reason: %s =====", robotName(), (unsigned long)bootNo, resetReasonStr(reason));
 
   bool prevValid = (bb.magic == BB_MAGIC && bb.size == sizeof(BlackBox) && bb.evFlushed <= bb.evTotal);
   if (prevValid) {

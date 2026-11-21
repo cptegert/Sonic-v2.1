@@ -13,7 +13,7 @@
 #include "wifi_log.h"  // Wi-Fi live log for laptop
 #include <driver/gpio.h>  // pintest
 #include <esp_task_wdt.h>
-#include "robot_config.h"  // MOTOR_SCALE
+#include "robot_config.h"  // robot identity (name, Bluetooth, GUI, motor scale)
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
 bool remoteCommand(const char *cmd, bool driving, Print &out);
@@ -103,13 +103,16 @@ void setup() {
   pixel.begin();
   pixel.setBrightness(50); // Set brightness (0-255, 50 = moderate brightness)
   setStatusLed(pixel.Color(255, 0, 0));
+  robot_identity_begin();  // which robot is this board? (stored in flash, see robot_config.h)
   logger_begin();  // logs reset reason + previous session black box
+  if (robotIdentityStored()) logEvent("identity: %s (%s)", robotName(), robotKey());
+  else logEvent("no identity stored -> %s (set with: name <robot>)", robotName());
   // Watchdog from here on, not only in loop(): a hang during startup (e.g. a sensor
   // that never boots after a supply dip) must restart the robot, not leave it dead.
   // Long setup steps feed it (esp_task_wdt_reset).
   enableLoopWDT();
 
-  RemoteXY_Init (); 
+  robot_remotexy_init();  // GUI + Bluetooth name from the stored robot identity
   esp_task_wdt_reset();
   wifiLog_begin();  // Wi-Fi access point for laptop live logs (BLE stays for RemoteXY)
 
@@ -486,7 +489,7 @@ static uint32_t remoteRunEndMs = 0;
 
 static void printParams(Print &out) {
   out.printf("params: robot=%s kp=%.2f ki=%.3f kd=%.2f speed=%.0f main_switch=%u manual=%u five_sec_bypass=%u remote_run=%u\n",
-             ROBOT_NAME, RemoteXY.PID_P * 15.0 / 100.0, RemoteXY.PID_I * 0.1 / 100.0, RemoteXY.PID_D * 15.0 / 100.0,
+             robotName(), RemoteXY.PID_P * 15.0 / 100.0, RemoteXY.PID_I * 0.1 / 100.0, RemoteXY.PID_D * 15.0 / 100.0,
              RemoteXY.MAX_SPEED, RemoteXY.Start_switch, RemoteXY.manual_mode_switch,
              RemoteXY.FIVE_SEC_WAIT, remoteRun);
 }
@@ -517,7 +520,32 @@ static void pinTest(int pin, Print &out) {
   logEvent("pintest GPIO%d: L%d H%d pu%d pd%d", pin, low, high, pu, pd);
 }
 
+// RemoteXY with the GUI and Bluetooth name of this board's identity (instead of the
+// RemoteXY_Init macro, which only takes compile-time values)
+void robot_remotexy_init() {
+  const uint8_t *gui = (robotGui() == GUI_SHADOW) ? RemoteXY_GUI_SHADOW : RemoteXY_GUI_SONIC;
+  RemoteXYEngine.addGui(gui, &RemoteXY, REMOTEXY_ACCESS_PASSWORD)
+      ->addConnection(new CRemoteXYStream_BLEDevice(robotBleName()));
+}
+
 bool remoteCommand(const char *cmd, bool driving, Print &out) {
+  char robotArg[16];
+  if (strcmp(cmd, "name") == 0) {
+    out.printf("robot: %s  key=%s  bluetooth=%s  wifi=%s  stored=%u\n", robotName(), robotKey(),
+               robotBleName(), robotWifiSsid(), robotIdentityStored());
+    robotListProfiles(out);
+    return true;
+  }
+  if (sscanf(cmd, "name %15s", robotArg) == 1) {
+    if (RemoteXY.Start_switch) { out.println("name: main switch must be OFF"); return true; }
+    if (!robotSetIdentity(robotArg)) { out.print("name: unknown robot. "); robotListProfiles(out); return true; }
+    logEvent("identity set to '%s' -> restart", robotArg);
+    out.printf("name: saved '%s', restarting now\n", robotArg);
+    if (&out == &Serial) Serial.flush();
+    delay(300);
+    ESP.restart();
+    return true;
+  }
   char name[8];
   float value;
   int pinNo;
@@ -653,7 +681,7 @@ void motorWrite(int us) {
     motorTestUntil = 0;
     logEvent("motor test end");
   }
-  int out = 1500 + (int)lroundf((us - 1500) * MOTOR_SCALE);
+  int out = 1500 + (int)lroundf((us - 1500) * robotMotorScale());
   motor.writeMicroseconds(constrain(out, 1000, 2000));
 }
 
@@ -668,7 +696,7 @@ static bool motorTestCommand(const char *cmd, Print &out) {
   motorTestUs = us;
   motorTestUntil = millis() + (uint32_t)(secs * 1000);
   motor.writeMicroseconds(us);
-  logEvent("motor test %d us for %.1f s (raw, scale %.2f not applied)", us, secs, (double)MOTOR_SCALE);
+  logEvent("motor test %d us for %.1f s (raw, scale %.2f not applied)", us, secs, (double)robotMotorScale());
   out.printf("motor test: %d us for %.1f s (wheels off the ground!)\n", us, secs);
   return true;
 }
