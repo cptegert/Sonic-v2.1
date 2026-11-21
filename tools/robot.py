@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Which robot is on USB? Upload the matching firmware.
 
+  Linux:   ~/.platformio/penv/bin/python tools/robot.py info
+  Windows: %USERPROFILE%\\.platformio\\penv\\Scripts\\python.exe tools\\robot.py info
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/robot.py info
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/robot.py upload
   ~/.platformio/penv/bin/python ~/Projects/Sonic-v2.1/tools/robot.py upload --robot shadow [--erase]
@@ -23,6 +25,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -32,8 +35,23 @@ import serial
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.join(HERE, "..")
 ROBOTS_FILE = os.path.join(HERE, "robots.json")
-PIO = os.path.expanduser("~/.platformio/penv/bin/pio")
-ESPTOOL = os.path.expanduser("~/.platformio/packages/tool-esptool/esptool")
+# Works on Linux, macOS and Windows (PlatformIO's own Python and tools)
+_PIO_HOME = os.path.expanduser("~/.platformio")
+_BIN = "Scripts" if os.name == "nt" else "bin"
+_EXE = ".exe" if os.name == "nt" else ""
+
+
+def _find_pio():
+    for cand in (os.path.join(_PIO_HOME, "penv", _BIN, "pio" + _EXE),
+                 os.path.join(_PIO_HOME, "penv", _BIN, "platformio" + _EXE),
+                 shutil.which("pio"), shutil.which("platformio")):
+        if cand and os.path.exists(cand):
+            return cand
+    sys.exit("PlatformIO (pio) not found - install the PlatformIO extension in VS Code first")
+
+
+PIO = _find_pio()
+ESPTOOL = os.path.join(_PIO_HOME, "packages", "tool-esptool", "esptool" + _EXE)
 
 
 def load_robots():
@@ -49,11 +67,14 @@ def save_robots(data):
 
 
 def find_port(port=None):
+    """USB serial port of the robot: /dev/ttyUSB0 (Linux), COM3 (Windows), ..."""
     if port:
         return port
-    ports = sorted(glob.glob("/dev/ttyUSB*") + glob.glob("/dev/ttyACM*"))
+    from serial.tools import list_ports
+    # ESP32 boards use USB-serial chips (CP210x, CH340, FTDI): ports with a USB VID
+    ports = sorted(p.device for p in list_ports.comports() if p.vid is not None)
     if not ports:
-        sys.exit("No robot on USB (/dev/ttyUSB*, /dev/ttyACM*)")
+        sys.exit("No robot on USB (no USB serial port found) - cable / driver (CP210x)?")
     if len(ports) > 1:
         sys.exit(f"Several USB serial ports {ports} - give one with --port")
     return ports[0]
@@ -78,7 +99,11 @@ def ask_firmware(port, cmd="params", timeout=2.5):
 
 
 def read_mac(port):
-    r = subprocess.run([ESPTOOL, "--port", port, "read-mac"], capture_output=True, text=True)
+    if os.path.exists(ESPTOOL):
+        cmd = [ESPTOOL, "--port", port, "read-mac"]
+    else:  # tool not unpacked yet / other layout: let PlatformIO run it
+        cmd = [PIO, "pkg", "exec", "--package", "tool-esptool", "--", "esptool", "--port", port, "read-mac"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
     m = re.search(r"MAC:\s*([0-9a-f:]{17})", r.stdout + r.stderr)
     return m.group(1) if m else None
 
