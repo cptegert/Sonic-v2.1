@@ -24,6 +24,11 @@ extern const int SERVO_MAX_US;
 #define REVERSE_POWER         0.5f   // reverse power, fraction of max speed (was 0.8)
 #define REVERSE_END_PAUSE_MS  100    // neutral before driving forward again
 
+// Not-moving detection (see autonomousDriving.cpp)
+#define NOT_MOVING_MS         1500   // sensors unchanged this long -> reverse
+#define NOT_MOVING_CHANGE_CM  20     // sum of changes over the 7 sensors that counts as "moving"
+#define NOT_MOVING_NEAR_CM    40     // only when something is this close
+
 // Snapshot of the controller's internals from the last autonomous_mode() call,
 // for the Wi-Fi telemetry recorder (PID tuning). Read-only copy, no effect on driving.
 struct PidTelemetry {

@@ -78,6 +78,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--robot", choices=sorted(robots), required=True)
     ap.add_argument("--minutes", type=float, default=20)
+    ap.add_argument("--no-recorder", action="store_true",
+                    help="only keep the Wi-Fi connection + timeline; a viewer (wifi_log.py) records")
     a = ap.parse_args()
     ssid = robots[a.robot]["ssid"]
     home = active_wifi()
@@ -111,13 +113,13 @@ def main():
                 if rc != 0:
                     rc, out = nmcli("connection", "up", "id", ssid)
                 say(f"EVENT joining {ssid} (scan signal {vis}%): {'ok' if rc == 0 else out[:80]}")
-                if rc == 0 and viewer is None:
+                if rc == 0 and viewer is None and not a.no_recorder:
                     viewer = subprocess.Popen(
                         [sys.executable, os.path.join(HERE, "wifi_log.py"), "--plain"],
                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                     say("viewer/recorder started (wifi_log.py)")
                 continue
-            if viewer is None:
+            if viewer is None and not a.no_recorder:
                 viewer = subprocess.Popen(
                     [sys.executable, os.path.join(HERE, "wifi_log.py"), "--plain"],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

@@ -62,6 +62,41 @@ void autonomous_mode() {
   }
 
   // ===================================================================================
+  //   NOT-MOVING DETECTION (2026-11-21): Shadow stood still for up to 11 s at a wall
+  //   after the hill - steering at full lock, speed at the minimum, too weak to move,
+  //   but not close enough (<CLOSE_DISTANCE_CM) for the stuck detection above.
+  //   If steering is at full lock (or speed at the minimum), something is closer than
+  //   NOT_MOVING_NEAR_CM and the 7 sensors barely change for NOT_MOVING_MS -> reverse.
+  //   (Straight driving between parallel walls never has full lock, so no false alarm.)
+  // ===================================================================================
+  static int stillRef[7];
+  static uint32_t stillSince = 0;
+  if (!reversing) {
+    bool fullLock = fabsf(steer_output - SERVO_CENTER_US) >= MAX_STEER - 10;
+    bool minSpeed = final_speed <= 1500 + min_speed * 5 + 5;
+    bool somethingNear = false;
+    int change = 0;
+    for (int i = 0; i < 7; i++) {
+      bool near = distancesAll[i] < NOT_MOVING_NEAR_CM || stillRef[i] < NOT_MOVING_NEAR_CM;
+      if (distancesAll[i] < NOT_MOVING_NEAR_CM) somethingNear = true;
+      if (near) change += abs(distancesAll[i] - stillRef[i]);  // far sensors are noisy, ignore them
+    }
+    uint32_t now = millis();
+    if (!(fullLock || minSpeed) || !somethingNear || change > NOT_MOVING_CHANGE_CM || stillSince == 0) {
+      for (int i = 0; i < 7; i++) stillRef[i] = distancesAll[i];   // moving (or can't tell)
+      stillSince = now;
+    } else if (now - stillSince > NOT_MOVING_MS) {
+      logEvent("NOT MOVING %lu ms (lock=%d minspeed=%d) -> reverse", (unsigned long)(now - stillSince), fullLock, minSpeed);
+      reversing = true;
+      reverseStart = now;
+      closeStart = 0;
+      stillSince = 0;
+    }
+  } else {
+    stillSince = 0;
+  }
+
+  // ===================================================================================
   //                              HIT RECOVERY MODE
   // ===================================================================================
   // Reverse back to original heading after hit detection

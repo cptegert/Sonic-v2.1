@@ -43,6 +43,11 @@ sock.settimeout(0.5)
 
 rx = queue.Queue()  # ("status", text) / ("line", text) / ("rec", text)
 
+# "!<n>" or "!<text>" in the viewer = a timestamped mark in the log (not sent to the robot)
+MARKS = {"0": "test start", "1": "tipped over", "2": "turned around / wrong way",
+         "3": "getting slower", "4": "stuck / pushing against a wall", "5": "stopped completely",
+         "6": "app lost connection", "7": "hit something / crash", "8": "back to normal"}
+
 
 class Recorder:
     """Writes telemetry rows (T,...) to one CSV file per run (TH,<run>,<header>)."""
@@ -174,7 +179,8 @@ def run_curses(scr):
     scr.keypad(True)
 
     lines = [f"# talking to robot {ROBOT[0]}:{ROBOT[1]}, saving to {out_path}",
-             "# commands: status, sensors, log, clear, quit   |  PgUp/PgDn scroll"]
+             "# commands: status, sensors, log, clear, quit   |  PgUp/PgDn scroll",
+             "# marks: !0 start  !1 tipped  !2 wrong way  !3 slower  !4 stuck  !5 stopped  !6 app lost  !7 crash  !8 normal  !<text>"]
     status = "(waiting for robot...)"
     rec = ""
     typed = ""
@@ -241,7 +247,12 @@ def run_curses(scr):
             scroll = 0
             if cmd in ("quit", "exit", "q"):
                 return
-            if cmd:
+            if cmd.startswith("!"):
+                text = MARKS.get(cmd[1:].strip(), cmd[1:].strip()) or "mark"
+                stamp = time.strftime("%H:%M:%S") + f".{int(time.time() * 10) % 10}"
+                out.write(f"{stamp} MARK {text}\n")
+                lines.append(f"{stamp} MARK {text}")
+            elif cmd:
                 lines.append(f"> {cmd}")
                 send(cmd)
         elif ch in (curses.KEY_BACKSPACE, 127, 8):
