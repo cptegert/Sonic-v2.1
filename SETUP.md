@@ -45,7 +45,19 @@ Run in the project folder (a terminal in VS Code):
 New board: add `--robot sonic` (and `--erase` for a used ESP32).
 `tools/robot.py info` only shows which robot is connected.
 
-## 3. RemoteXY app
+## 3. Live logging over Wi-Fi
+
+- **Linux:** `tools/log.sh shadow` (or `sonic` / `knuckles`) joins the robot's
+  Wi-Fi by itself, shows the live viewer and records to `crashlogs/`.
+- **Windows:** join the robot's Wi-Fi in the Windows Wi-Fi menu
+  (`Shadow-log` / `Sonic-X-log` / `Knuckles-log`, password `sonicx123`), then run
+  `tools\log.bat` (double-click or from a terminal). Simple scrolling view.
+
+In the viewer: type a command (`status`, `sensors`, `log`) or a **mark**
+(`!3` slower, `!4` stuck, `!5` stopped, `!7` crash, `!0` start, `!any text`) +
+Enter. `q` quits. One laptop can log one robot at a time.
+
+## 4. RemoteXY app
 
 After a name change the phone may still show the old Bluetooth name (cache):
 delete the robot in the app and scan again; if needed switch the phone's

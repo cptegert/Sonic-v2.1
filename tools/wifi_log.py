@@ -19,7 +19,10 @@ Status fields: up=uptime  cyc=loop ms  max=slowest loop since last heartbeat
 sw=main switch  drive=driving  man=manual  ble=app connected  rev=reversing
 spd/str=motor/servo us  dist=7 sensors cm [FFL FL L M R FR FFR]  i2cErr=I2C errors
 """
-import curses
+try:
+    import curses  # not in Windows' Python -> simple scrolling mode
+except ImportError:
+    curses = None
 import os
 import queue
 import socket
@@ -154,8 +157,18 @@ def run_plain():
     """Old style: everything scrolls, status only every 2 s."""
     def stdin_commands():
         for line in sys.stdin:
-            if line.strip():
-                send(line.strip())
+            cmd = line.strip()
+            if not cmd:
+                continue
+            if cmd.startswith("!"):
+                text = MARKS.get(cmd[1:].strip(), cmd[1:].strip()) or "mark"
+                stamp = time.strftime("%H:%M:%S") + f".{int(time.time() * 10) % 10}"
+                out.write(f"{stamp} MARK {text}\n")
+                rx.put(("line", f"{stamp} MARK {text}"))
+            elif cmd in ("q", "quit", "exit"):
+                os._exit(0)
+            else:
+                send(cmd)
     threading.Thread(target=stdin_commands, daemon=True).start()
     last_status = 0.0
     while True:
@@ -268,7 +281,9 @@ def run_curses(scr):
 threading.Thread(target=keepalive, daemon=True).start()
 threading.Thread(target=receiver, daemon=True).start()
 try:
-    if "--plain" in sys.argv or not sys.stdout.isatty():
+    if "--plain" in sys.argv or not sys.stdout.isatty() or curses is None:
+        if curses is None:
+            print("# simple mode (no curses on this system): type a command or !mark + Enter, q = quit")
         run_plain()
     else:
         curses.wrapper(run_curses)
