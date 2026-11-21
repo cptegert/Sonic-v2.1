@@ -20,6 +20,8 @@
     "env": "knuckles",
     "name": "Knuckles",
     "ssid": "Knuckles-log",
-    "macs": []
+    "macs": [
+      "f0:16:1d:4c:78:68"
+    ]
   }
 }
