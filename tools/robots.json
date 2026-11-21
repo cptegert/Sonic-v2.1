@@ -1,5 +1,25 @@
 {
   "_comment": "Robots of this project. env = PlatformIO environment, macs = ESP32 boards (esptool MAC). tools/robot.py adds a board when you upload with --robot.",
-  "sonic":  {"env": "sonic",  "name": "Sonic-X", "ssid": "Sonic-X-log", "macs": ["94:3c:c6:cd:d7:89"]},
-  "shadow": {"env": "shadow", "name": "Shadow",  "ssid": "Shadow-log",  "macs": ["94:3c:c6:cd:b9:e4"]}
+  "sonic": {
+    "env": "sonic",
+    "name": "Sonic-X",
+    "ssid": "Sonic-X-log",
+    "macs": [
+      "94:3c:c6:cd:d7:89"
+    ]
+  },
+  "shadow": {
+    "env": "shadow",
+    "name": "Shadow",
+    "ssid": "Shadow-log",
+    "macs": [
+      "94:3c:c6:cd:b9:e4"
+    ]
+  },
+  "knuckles": {
+    "env": "knuckles",
+    "name": "Knuckles",
+    "ssid": "Knuckles-log",
+    "macs": []
+  }
 }

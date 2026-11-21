@@ -17,6 +17,7 @@ The laptop must already be on the robot's Wi-Fi with internet another way
 (USB tethering); auto_run rejoins the robot's Wi-Fi if needed.
 """
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -55,7 +56,9 @@ def main():
     ap.add_argument("--repeat", type=int, default=2)
     ap.add_argument("--duration", type=int, default=40)
     ap.add_argument("--pause", type=int, default=15, help="seconds between runs")
-    ap.add_argument("--robot", choices=["sonic", "shadow", "auto"], default="auto")
+    with open(os.path.join(HERE, "robots.json")) as f:
+        known = [k for k in json.load(f) if not k.startswith("_")]
+    ap.add_argument("--robot", choices=known + ["auto"], default="auto")
     a = ap.parse_args()
     configs = [parse_config(c) for c in a.config]
     order = [c for _ in range(a.repeat) for c in configs]
