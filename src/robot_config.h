@@ -8,6 +8,11 @@
 
 #define ROBOT_WIFI_SSID ROBOT_NAME "-log"   // e.g. "Sonic-X-log", "Shadow-log"
 
+// Bluetooth name shown in the RemoteXY app (default: ROBOT_NAME)
+#ifndef ROBOT_BLE_NAME
+#define ROBOT_BLE_NAME ROBOT_NAME
+#endif
+
 // Motor scale: different ESCs reach full speed at different signals. The driving
 // code thinks in Sonic's range (1500 neutral .. 2000 full forward); every motor
 // command is scaled around neutral: out = 1500 + (us - 1500) * MOTOR_SCALE.
