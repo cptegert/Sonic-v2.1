@@ -75,6 +75,7 @@ input[type=number]{width:80px}
   <span id="link" class="pill">waiting</span>
   <span id="drive" class="pill">-</span>
   <span class="kv">track <select id="trackSel"></select> <button id="newTrackBtn" title="New track: the robot starts learning it from scratch">New track…</button> <button id="renameBtn" title="Rename this track (on this robot now, on the other robots when they connect)">Rename…</button></span>
+  <span class="kv">speed map <b id="hSmap">-</b></span>
   <span class="kv">laps <b id="hLaps">-</b></span>
   <span class="kv">last lap <b id="hLast">-</b></span>
   <span class="kv">app <b id="hBle">-</b></span>
@@ -197,14 +198,17 @@ input[type=number]{width:80px}
     <h2>Speed learning <small>where the robot slows down or speeds up – learned per robot and per track</small></h2>
     <div class="row">
       <span class="small muted">Mode:</span>
-      <button data-smap="off" title="drives the set speed everywhere">Off</button>
-      <button data-smap="on" title="slows down where it gets into trouble (wall, reversing, stuck, sliding wider)">Slow down only</button>
-      <button data-smap="dynamic" title="also faster (up to +25 %) where it drove clean with room to the walls">Dynamic: slower + faster</button>
+      <button data-smap="off" title="set speed everywhere; what was learned is kept but not used and not changed">Off</button>
+      <button data-smap="freeze" title="drives with what it learned, but changes nothing (e.g. competition)">Use, don't learn</button>
+      <button data-smap="on" title="learns: slows down where it gets into trouble (wall, reversing, stuck, sliding wider)">Learn: slow down only</button>
+      <button data-smap="dynamic" title="learns: also faster (up to +25 %) where it drove clean with room to the walls">Learn: slower + faster</button>
       <button id="mapReset" title="forget what was learned on this track">Reset learning</button>
       <span id="smapMsg" class="small"></span>
     </div>
     <div class="small muted" style="margin-top:6px">After every regular lap, per part of the track: trouble there (closer than 15 cm to a wall, reversing, stuck) → 10 % slower there, and it starts braking one part earlier. Getting closer to the wall than usual (sliding wider, dirty wheels) → 3 % slower. Clean → back up. <b>Dynamic</b> also goes faster in small steps where it stayed clean with 25 cm+ room – and if that leads to trouble, it backs off and remembers its limit there. Sonic and Shadow each learn their own.</div>
-    <div id="learnFind" style="margin-top:8px"></div>
+    <div class="small" style="margin-top:6px">What it learned is <b>saved on the robot</b> (per track) and used again after power-off. Switching the mode never deletes it – only <b>Reset learning</b> does.</div>
+    <div id="learnNow" style="margin-top:8px;font-weight:600"></div>
+    <div id="learnFind" style="margin-top:4px"></div>
     <svg id="learnSvg" viewBox="0 0 1000 300" style="margin-top:6px"></svg>
     <div class="legend">Each row = one lap of the current drive (newest at the bottom), each column = a track part. Colour = speed used there: <span style="color:var(--bad)">red slower</span> · <span style="color:var(--ok)">green normal</span> · <span style="color:var(--acc)">blue faster</span>. ✕ = trouble in that lap and part. Bottom row = what it has learned now.</div>
   </section>
@@ -553,7 +557,13 @@ function drawRing() {
 // ---------------------------------------------------------------- speed learning
 const fCol = f => f == null ? 'var(--soft)' : f > 1.02 ? `hsl(220,70%,${Math.max(35, 62 - (f - 1) * 120)}%)` : f > 0.97 ? 'var(--ok)' : `hsl(${Math.max(0, 40 - (1 - f) * 100)},80%,50%)`;
 function renderLearning() {
-  const Lr = S.learning, mode = {'0': 'off', '1': 'on', '2': 'dynamic'}[Lr.mode];
+  const Lr = S.learning, mode = {'0': 'off', '1': 'on', '2': 'dynamic', '3': 'freeze'}[Lr.mode];
+  const MODE_TXT = {off: 'Off – set speed, map kept but not used', freeze: 'Using what it learned, not learning', on: 'Learning: slows down where needed', dynamic: 'Learning: slower + faster'};
+  $('#hSmap').textContent = {off: 'off', freeze: 'frozen', on: 'slow down', dynamic: 'dynamic'}[mode] || '?';
+  const P = S.pos || {}, learningMode = mode === 'on' || mode === 'dynamic';
+  $('#learnNow').innerHTML = !mode ? '<span class="muted">mode unknown (robot not connected, or old firmware)</span>' :
+    MODE_TXT[mode] + (learningMode && S.driving ? (P.robot != null ? ' – <span style="color:var(--ok)">active now: the robot knows where it is on the track</span>' :
+      ` – <span style="color:var(--warn)">waiting: ${esc(P.why || 'the robot does not know where it is yet (needs the lap mark and a lap time for this track)')}</span>`) : '');
   $$('[data-smap]').forEach(b => b.classList.toggle('on', b.dataset.smap === mode));
   const laps = Lr.laps, F = Lr.factors, rows = laps.length + (F ? 1 : 0);
   const cw = 900 / 20, rh = Math.min(18, 260 / Math.max(1, rows));
@@ -590,7 +600,7 @@ function renderLearning() {
     if (!f.length) f.push('<div class="muted">nothing learned on this track yet – everything at the set speed</div>');
     if (recent.length >= 3) f.push(`<div class="small" style="margin-top:4px">${probs.size ? `Last ${recent.length} laps: trouble still in part ${[...probs].map(k => k + 1).join(', ')} – it keeps adjusting.` : `Last ${recent.length} laps clean – what it learned works.`}</div>`);
   }
-  $('#learnFind').innerHTML = mode === 'off' ? '<div><b>Learning is OFF</b> – the robot drives the set speed everywhere.</div>' + f.join('') : f.join('');
+  $('#learnFind').innerHTML = f.join('');
 }
 $$('[data-smap]').forEach(b => b.onclick = async () => { const r = await api('/api/map/mode', {mode: b.dataset.smap}); $('#smapMsg').textContent = r.ok ? '' : (r.reply || r.error); });
 $('#mapReset').onclick = async () => { if (!confirm(`Forget everything the robot learned on track “${S.track}”?`)) return; const r = await api('/api/map/reset', {}); $('#smapMsg').textContent = r.error || (r.ok ? 'learning reset' : 'no answer'); };

@@ -19,7 +19,8 @@
 // own map, lap time and lap fingerprint (so the next drive finds the same lap mark
 // and the parts line up). "track <name>" switches (new name = learn from scratch,
 // oldest track is forgotten when full). Default track: "default".
-// Commands: map | map on (slow down only) | map dynamic (slower + faster) | map off |
+// Commands: map | map on (slow down only) | map dynamic (slower + faster) |
+//           map freeze (use it, learn nothing) | map off (not used, kept) |
 //           map reset | track | track <name> | track rename <new>
 // Grip / dirty wheels: see GRIP_* below.
 // -----------------------------------------------------------------------------
@@ -59,6 +60,7 @@ float speedmap_factor();               // speed multiplier now (1.0 = no change)
 int speedmap_part();                   // current part 0..PARTS-1, -1 = position unknown
 bool speedmap_command(const char *cmd, bool driving, Print &out);   // map ... / track ...
 const char *speedmap_track_name();
-int speedmap_mode();                   // 0 off, 1 slow down only, 2 dynamic
+int speedmap_mode();                   // 0 off, 1 slow down only, 2 dynamic, 3 frozen
+const char *speedmap_mode_name();
 
 #endif

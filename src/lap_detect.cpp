@@ -20,7 +20,9 @@ static bool synced = true;    // false = saved fingerprint loaded, lap mark not 
 static bool wrongWay = false; // set by you ("mark wrong"): nothing is learned meanwhile
 static bool tmplProven = false; // fingerprint found again / gave 3 laps: worth searching for
 static int tmplLaps = 0;
-void speedmap_lap_done(bool consistent);                // speed_map.cpp
+void speedmap_lap_done(bool consistent, bool troubleOnly);   // speed_map.cpp
+float speedmap_saved_lap_s();                          // typical lap time saved with the track
+static float typicalLapS();
 bool speedmap_saved_template(float *out);               // fingerprint of this track
 void speedmap_template_learned(const float *t);
 const char *speedmap_track_name();
@@ -332,15 +334,20 @@ void lap_update(const LapSample &s) {
     laps++;
     if (++tmplLaps >= 3) tmplProven = true;
     float med = medianRecent();
-    lastConsistent = recentN >= LAP_POS_MIN_LAPS - 1 && med > 0 &&
-                     fabsf(lastLapS - med) <= LAP_POS_TOLERANCE * med;
+    float typ = typicalLapS();     // before this lap counts
+    if (typ > 0) lastConsistent = fabsf(lastLapS - typ) <= LAP_POS_TOLERANCE * typ;
+    else lastConsistent = recentN >= LAP_POS_MIN_LAPS - 1 && med > 0 &&
+                          fabsf(lastLapS - med) <= LAP_POS_TOLERANCE * med;
+    // a lap made longer by trouble still tells WHERE the trouble was (the position is
+    // measured from the lap mark): learn "slow down there", but nothing else
+    bool troubleOnly = !lastConsistent && typ > 0 && lastLapS > (1.0f + LAP_POS_TOLERANCE) * typ;
     recent[recentN % 5] = lastLapS;
     recentN++;
     logEvent("LAP %d: %.2f s (match %.2f)", laps, lastLapS, prevC);
     logLapSummary(laps, lastLapS);
     resetStats();
     sigLapDone(lastConsistent);
-    speedmap_lap_done(lastConsistent);
+    speedmap_lap_done(lastConsistent, troubleOnly);
   }
   prevPrevC = prevC;
   prevC = c;
@@ -350,9 +357,31 @@ void lap_update(const LapSample &s) {
 int lap_count() { return laps; }
 float lap_last_s() { return lastLapS; }
 
+// Typical lap time: the recent laps if they agree with the time saved for this track
+// (or there is none saved), else the saved one (crash laps make the recent ones long).
+static float typicalLapS() {
+  float saved = speedmap_saved_lap_s();
+  if (recentN >= LAP_POS_MIN_LAPS) {
+    float med = medianRecent();
+    // the last 3 laps agree with each other -> that IS the lap time now (also after a
+    // speed change); crash laps hardly ever agree with each other
+    bool agree = true;
+    for (int k = 1; k <= 3; k++) {
+      float t = recent[(recentN - k) % 5];
+      if (fabsf(t - med) > 0.15f * med) agree = false;
+    }
+    if (agree || saved <= 0 || fabsf(med - saved) <= 0.25f * saved) return med;
+  }
+  return saved > 0 ? saved : 0;
+}
+
+// Position = time since the lap mark / typical lap time. The lap mark is a precise
+// anchor, so this works from the first lap mark on once the typical lap time is known
+// (saved for the track) - it no longer needs 3 regular laps in a row (2026-11-22:
+// crash-heavy drives never learned anything).
 bool lap_position(float *phase) {
-  if (!wasDriving || !haveTemplate || !synced || wrongWay || laps < LAP_POS_MIN_LAPS || !lastConsistent) return false;
-  float med = medianRecent();
+  if (!wasDriving || !haveTemplate || !synced || wrongWay) return false;
+  float med = typicalLapS();
   if (med <= 0) return false;
   float p = (millis() - lastLapMs) / (med * 1000.0f);
   if (p > 1.0f + LAP_POS_TOLERANCE) return false;   // overdue: lost track of the position

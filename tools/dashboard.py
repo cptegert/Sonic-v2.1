@@ -950,7 +950,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": True}
         if path == "/api/map/mode":
             mode = d.get("mode")
-            if mode not in ("off", "on", "dynamic"):
+            if mode not in ("off", "on", "dynamic", "freeze"):
                 return {"error": "mode?"}
             r = L.ask(f"map {mode}", "SPEEDMAP", timeout=1.5)
             return {"ok": bool(r), "reply": r or "no answer (robot connected? new firmware?)"}

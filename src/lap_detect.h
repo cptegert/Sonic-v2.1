@@ -46,9 +46,10 @@ void lap_note(LapEvent ev);
 int lap_count();
 float lap_last_s();     // last lap time in s, 0 = none yet
 
-// Position within the current lap, for the speed map. Returns false when the laps are
-// not regular enough to trust it (fewer than LAP_POS_MIN_LAPS, or the last lap
-// differs more than LAP_POS_TOLERANCE from the median of the recent laps).
+// Position within the current lap, for the speed map: time since the lap mark divided
+// by the typical lap time (recent laps, or the one saved with the track). False when
+// there is no lap mark yet, no typical lap time, wrong way, or the lap is overdue by
+// more than LAP_POS_TOLERANCE (lost).
 #define LAP_POS_MIN_LAPS   3
 #define LAP_POS_TOLERANCE  0.20f
 bool lap_position(float *phase);   // 0..1 = fraction of a typical lap since the lap mark

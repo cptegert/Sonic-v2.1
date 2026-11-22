@@ -396,7 +396,7 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     LittleFS.remove(LOG_FILE_OLD);
     out.println("Log cleared");
   } else if (cmd[0] != 0) {
-    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, map [on|dynamic|off|reset], track [name|rename <new>], mark <text>, save, rounds [clear], name [robot], clear (delete log)");
+    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, map [on|dynamic|freeze|off|reset], track [name|rename <new>], mark <text>, save, rounds [clear], name [robot], clear (delete log)");
   }
 }
 
@@ -450,7 +450,7 @@ void logger_loop(const LogSnapshot &s) {
     if (s.startSwitch != prev.startSwitch) logEvent("main switch %s", s.startSwitch ? "ON" : "OFF");
     if (s.manual != prev.manual)           logEvent("mode -> %s", s.manual ? "manual" : "autonomous");
     if (s.driving != prev.driving) {
-      if (s.driving) logEvent("driving started (track '%s')", speedmap_track_name());
+      if (s.driving) logEvent("driving started (track '%s', speed map %s)", speedmap_track_name(), speedmap_mode_name());
       else logEvent("driving stopped");
     }
     // Start/stop events go to flash at once: a power-off right after a stop must not
