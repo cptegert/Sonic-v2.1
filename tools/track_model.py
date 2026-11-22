@@ -110,7 +110,7 @@ def run_profile(rows):
     if len(reg) < 2:
         return None
     acc = [{"n": 0, "steer": 0.0, "spd": 0.0, "left": 0.0, "right": 0.0, "smf": 0.0,
-            "near": set(), "lock": set(), "rev": set()} for _ in range(N)]
+            "near": set(), "lock": set(), "rev": set(), "spds": []} for _ in range(N)]
     has_smf = "smf" in rows[0]
     for li, l in enumerate(reg):
         t0, t1 = l[0]["t_ms"], l[-1]["t_ms"]
@@ -120,6 +120,7 @@ def run_profile(rows):
             if not r.get("rev", 0):
                 x["steer"] += r["steer_us"] - 1500
             x["spd"] += r["speed_us"]
+            x["spds"].append(r["speed_us"])
             x["left"] += r["left"]
             x["right"] += r["right"]
             x["smf"] += r["smf"] if has_smf else 1.0
@@ -130,7 +131,7 @@ def run_profile(rows):
             if r.get("rev", 0):
                 x["rev"].add(li)
     nl = len(reg)
-    p = {k: [] for k in ("steer", "speed", "left", "right", "smf", "near", "lock", "rev")}
+    p = {k: [] for k in ("steer", "speed", "left", "right", "smf", "near", "lock", "rev", "speed_lo", "speed_hi")}
     for i, x in enumerate(acc):
         if not x["n"]:          # empty bin (Wi-Fi gap): copy the neighbour
             x = acc[i - 1] if i else next(a for a in acc if a["n"])
@@ -143,6 +144,9 @@ def run_profile(rows):
         p["left"].append(round(x["left"] / n, 1))
         p["right"].append(round(x["right"] / n, 1))
         p["smf"].append(round(x["smf"] / n, 3))
+        sp = sorted(x["spds"])
+        p["speed_lo"].append(sp[len(sp) // 10])
+        p["speed_hi"].append(sp[min(len(sp) - 1, len(sp) * 9 // 10)])
         for k in ("near", "lock", "rev"):
             p[k].append(round(len(x[k]) / nl, 3))
     p["laps"] = nl
@@ -185,7 +189,9 @@ def combine(profiles, max_runs=12):
     if not profiles:
         return None
     ref = profiles[0]["steer"]
-    keys = ("steer", "speed", "left", "right", "smf", "near", "lock", "rev")
+    keys = ["steer", "speed", "left", "right", "smf", "near", "lock", "rev"]
+    if all("speed_lo" in p for p in profiles):
+        keys += ["speed_lo", "speed_hi"]
     tot = {k: [0.0] * N for k in keys}
     wsum, laps, lap_s, shifts = 0.0, 0, 0.0, []
     for age, p in enumerate(profiles):
@@ -665,6 +671,34 @@ def match(p, lay, geom=None, prior=None):
             "bin_to_draw": bin_to_draw, "draw_bin": draw_bin}
 
 
+def similarity_fit(src, dst):
+    """Best rotation + scale + shift of the points src onto dst (same length): src mapped."""
+    n = len(src)
+    mx = sum(p[0] for p in src) / n; my = sum(p[1] for p in src) / n
+    nx = sum(p[0] for p in dst) / n; ny = sum(p[1] for p in dst) / n
+    a = b = ss = 0.0
+    for (x, y), (u, v) in zip(src, dst):
+        x -= mx; y -= my; u -= nx; v -= ny
+        a += x * u + y * v
+        b += x * v - y * u
+        ss += x * x + y * y
+    if ss < 1e-12:
+        return None, None
+    c, s_ = a / ss, b / ss                     # scale * (cos, sin)
+    out = [[round(nx + c * (x - mx) - s_ * (y - my), 3), round(ny + s_ * (x - mx) + c * (y - my), 3)] for x, y in src]
+    err = math.sqrt(sum((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 for p, q in zip(out, dst)) / n)
+    size = math.sqrt(sum((q[0] - nx) ** 2 + (q[1] - ny) ** 2 for q in dst) / n) or 1
+    return out, err / size
+
+
+def backwards_lookalike(up):
+    """How much the track looks the same driven backwards (turn order): 0..1.
+    High (figure-8, symmetric shapes) = steering cannot tell the direction."""
+    d = smooth(heading_changes(up), 3)
+    back = [-x for x in reversed(d)]
+    return round(max(0.0, _corr_shift(d, back)[1]), 2)
+
+
 # --------------------------------------------------------------------------- summary
 def parts_table(p, dth, hills_bins=None):
     rows = []
@@ -707,6 +741,7 @@ def analyse(track, robot, geom=None, live_profile=None, live_key=None, calib=Non
     if lay:
         dd = heading_changes(lay["up"])
         res["drawing"] = {"xy": lay["xy"], "hills": lay["hills"], "turns": turns(dd),
+                          "backwards_lookalike": backwards_lookalike(lay["up"]),
                           "raw": lay.get("raw"), "tiles": lay.get("tiles"), "length_tiles": lay.get("length_tiles"),
                           "start": start or (layout or {}).get("placement")}
     if not p:
@@ -726,6 +761,16 @@ def analyse(track, robot, geom=None, live_profile=None, live_key=None, calib=Non
         "parts": parts_table(p, dth, hills_bins),
     }
     res["match"] = m
+    res["profile"]["speed_lo"] = p.get("speed_lo")
+    res["profile"]["speed_hi"] = p.get("speed_hi")
+    if m and lay:
+        # the robot's own shape guess, turned / scaled onto your track for comparison
+        target = lay.get("raw") or lay["xy"]
+        est = res["profile"]["shape"]
+        dst = [target[m["bin_to_draw"][i]] for i in range(N)]
+        ov, err = similarity_fit(est, dst)
+        if ov:
+            res["overlay"] = {"points": ov, "error": round(err, 3)}
     return res
 
 

@@ -20,6 +20,7 @@
 // and the parts line up). "track <name>" switches (new name = learn from scratch,
 // oldest track is forgotten when full). Default track: "default".
 // Commands: map | map on | map off | map reset | track | track <name>
+// Grip / dirty wheels: see GRIP_* below.
 // -----------------------------------------------------------------------------
 #ifndef SPEED_MAP_H
 #define SPEED_MAP_H
@@ -32,6 +33,13 @@
 #define SPEEDMAP_STEP_UP     0.03f
 #define SPEEDMAP_MIN_FACTOR  0.60f
 #define SPEEDMAP_NEW_TRACK   0.25f   // lap time differs > 25 % from the saved one -> new track
+// Grip: a part where the robot gets GRIP_DROP_CM closer to the wall than usual
+// (no hard trouble yet) is slowed by GRIP_STEP_DOWN - dirty wheels slide wider.
+// "mark cleaned" (dashboard button) brings slowed parts most of the way back.
+#define GRIP_DROP_CM         8
+#define GRIP_STEP_DOWN       0.03f
+#define GRIP_BASE_ALPHA      0.05f   // "usual" distance follows slowly
+#define GRIP_CLEAN_RECOVER   0.6f
 #define TRACK_SLOTS          6
 #define TRACK_NAME_LEN       16
 

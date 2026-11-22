@@ -50,6 +50,7 @@ MARKS = {  # code -> (log text, robot command)
     "stopped": ("stopped completely", "mark stopped"),
     "normal": ("back to normal", "mark normal"),
     "start": ("test start", "mark start"),
+    "cleaned": ("wheels cleaned", "mark cleaned"),
 }
 
 
@@ -99,6 +100,9 @@ class Link:
         self.connected = False
         self.laps = collections.deque(maxlen=200)       # parsed LAPSUM
         self.marks = collections.deque(maxlen=100)      # (laptop time, robot ms, text)
+        self.ww_events = []                             # (laptop time, detected?) from the robot
+        self.ww_marks = []                              # (laptop time, wrong?) your marks
+        self.series = collections.deque(maxlen=900)     # (laptop time, fwd, back, detected, your flag) ~3 min
         # recording
         self.run = None
         self.header = None
@@ -181,14 +185,21 @@ class Link:
             self.status_at = time.time()
 
     def _parse_event(self, line):
+        if "WRONG WAY? detected" in line:
+            with self.lock:
+                self.ww_events.append((time.time(), True))
+        elif "right way again (detected" in line:
+            with self.lock:
+                self.ww_events.append((time.time(), False))
         m = re.search(r"LAPSUM (\d+) ([\d.]+)s rev(\d+) trap(\d+) notmov(\d+) blind(\d+) minwall(-?\d+)cm "
-                      r"lock(\d+)% minspd(\d+)% spd(\d+)us", line)
+                      r"lock(\d+)% minspd(\d+)% spd(\d+)us(?: margin(\d+)cm)?", line)
         if m:
-            v = [float(x) for x in m.groups()]
+            v = [float(x) if x is not None else None for x in m.groups()]
             with self.lock:
                 self.laps.append({"lap": int(v[0]), "s": v[1], "rev": int(v[2]), "trap": int(v[3]),
                                   "notmov": int(v[4]), "blind": int(v[5]), "minwall": int(v[6]),
                                   "lock": int(v[7]), "minspd": int(v[8]), "spd": int(v[9]),
+                                  "margin": int(v[10]) if v[10] is not None else None,
                                   "at": time.time(), "run": self.csv_path})
         with self.lock:
             for w in self.waiters:
@@ -239,6 +250,9 @@ class Link:
         with self.lock:
             self.rows.append(r)
             self.rows_ver += 1
+            now = time.time()
+            if "wfwd" in r and (not self.series or now - self.series[-1][0] >= 0.2):
+                self.series.append((round(now, 1), r["wfwd"], r["wback"], int(r["wwd"]), int(r.get("ww", 0))))
 
     def ask(self, cmd, expect, timeout=1.5, tries=3):
         """Send a command, wait for a reply line containing one of `expect`."""
@@ -272,6 +286,7 @@ class SpeedTest:
 
     def __init__(self, app):
         self.app = app
+        self.phase, self.phase_until = "", 0.0   # what happens now, until when (laptop time)
         self.state = "idle"     # idle / running / paused / stopping / done / aborted
         self.log = collections.deque(maxlen=200)
         self.results = {}
@@ -331,6 +346,7 @@ class SpeedTest:
                     aborted = "stopped by you"
                     break
                 if link.driving():
+                    self.phase, self.phase_until = "waiting for the robot to stop", 0
                     self.say("waiting for the robot to stop ...")
                     while link.driving() and not self.stop_req:
                         time.sleep(0.3)
@@ -344,7 +360,12 @@ class SpeedTest:
                     aborted = f"start refused: {r or 'no reply'}"
                     break
                 self.say(f"run {n}/{len(order)}: speed {speed:g} - 5 s countdown, then {self.cfg['duration']} s")
-                end = time.time() + 5 + self.cfg["duration"] + 3
+                t_go = time.time() + 5
+                self.phase, self.phase_until = f"countdown – speed {speed:g}", t_go
+                end = t_go + self.cfg["duration"] + 3
+                while time.time() < t_go and not self.stop_req:
+                    time.sleep(0.2)
+                self.phase, self.phase_until = f"driving at speed {speed:g}", end - 3
                 while time.time() < end and not self.stop_req:
                     time.sleep(0.3)
                 link.ask("stop", "stopped")
@@ -378,6 +399,7 @@ class SpeedTest:
                     break
                 if self.pause_req:
                     self.state = "paused"
+                    self.phase, self.phase_until = "paused – press Continue when the robot is back on the track", 0
                     self.say("PAUSED - swap the battery / fix the robot, put it on the track, then Continue")
                     while self.pause_req and not self.stop_req:
                         time.sleep(0.3)
@@ -388,6 +410,7 @@ class SpeedTest:
                     self.say("continuing in 5 s")
                     self._sleep(5)
                 else:
+                    self.phase, self.phase_until = "short break before the next speed", time.time() + self.cfg["pause"]
                     self._sleep(self.cfg["pause"])
         except Exception as e:  # never leave the robot driving
             aborted = f"error: {e}"
@@ -411,6 +434,7 @@ class SpeedTest:
         return rows
 
     def _finish(self, aborted, orig):
+        self.phase, self.phase_until = "", 0
         rows = self.summary()
         scored = [r for r in rows if r["laps_per_min"]]
         self.best = max(scored, key=lambda r: r["laps_per_min"])["speed"] if scored else None
@@ -435,6 +459,7 @@ class SpeedTest:
 
     def to_json(self):
         return {"state": self.state, "run": self.run_no, "total": self.total, "cfg": self.cfg,
+                "phase": self.phase, "phase_left": max(0, round(self.phase_until - time.time())) if self.phase_until else None,
                 "log": list(self.log)[-40:], "results": self.summary() if self.cfg else [], "best": self.best,
                 "pause_req": self.pause_req}
 
@@ -456,6 +481,8 @@ class App:
         self.robot_track_seen = None
         self.placement = None       # where you put the robot for the NEXT drive (tile + direction)
         self.run_start = {}         # run file -> placement used for that drive
+        self.ww_want = None         # what you last said: True wrong way / False right way
+        self.ww_sent = 0.0
         threading.Thread(target=self._analysis_loop, daemon=True).start()
 
     def geom(self):
@@ -489,6 +516,14 @@ class App:
                     self.link.event(f"# drive starts where you placed the robot: tile ({self.placement['x']},"
                                     f"{self.placement['y']}) facing {tm.SIDE_NAME[self.placement['dir']]}")
                 self.placement = None                 # used up: mark it again for the next drive
+                self.ww_want = None                   # the robot starts every drive "right way"
+            # the robot did not get your wrong-way / right-way button (Wi-Fi gap): send again
+            st = self.link.status
+            if (self.ww_want is not None and self.link.driving() and "ww" in st
+                    and (st["ww"] == "1") != self.ww_want and time.time() - self.ww_sent > 2.5):
+                self.ww_sent = time.time()
+                self.link.send("mark wrong" if self.ww_want else "mark ok")
+                self.link.event("# robot missed your wrong-way button - sent again", write=True)
             try:
                 if ver != last_ver:
                     last_ver = ver
@@ -533,26 +568,62 @@ class App:
                 self.link.event(f"# dashboard analysis error: {e!r}", write=False)
 
     def live_position(self):
-        """Fraction of the lap the robot is at now (from the newest telemetry), or None."""
+        """Where the robot is in the lap now: its own estimate (timing, what the speed map
+        uses), the sensor match, and the laptop's timing estimate. Fractions 0..1 or None."""
         with self.link.lock:
-            rows = self.link.rows[-400:] if self.link.rows else []
-        if not rows or not self.link.driving() or time.time() - self.link.last_rx > 2:
-            return None
-        lap_s = self.live_profile["lap_s"] if self.live_profile else (
-            self.analysis and self.analysis.get("profile") and self.analysis["profile"]["lap_s"])
-        if not lap_s or "lap" not in rows[-1] or rows[-1]["lap"] < 1:
-            return None
-        t_lap = None
-        with self.link.lock:
+            row = self.link.rows[-1] if self.link.rows else None
             allrows = self.link.rows
-            for i in range(len(allrows) - 1, 0, -1):
+            t_lap = None
+            for i in range(len(allrows) - 1, max(0, len(allrows) - 800), -1):
                 if allrows[i]["lap"] > allrows[i - 1]["lap"]:
                     t_lap = allrows[i]["t_ms"]
                     break
-        if t_lap is None:
-            return None
-        f = (rows[-1]["t_ms"] - t_lap) / 1000 / lap_s
-        return round(f, 3) if 0 <= f <= 1.2 else None
+        if not row or not self.link.driving() or time.time() - self.link.last_rx > 2:
+            return {"why": "not driving" if row else "no data"}
+        out = {"age": round(time.time() - self.link.last_rx, 2)}
+        if row.get("ph", -1) >= 0:
+            out["robot"] = row["ph"] / 1000
+        if row.get("wpos", -1) >= 0:
+            out["sensors"] = row["wpos"] / 1000
+        lap_s = (self.live_profile or {}).get("lap_s") or (
+            self.analysis and self.analysis.get("profile") and self.analysis["profile"]["lap_s"])
+        if lap_s and t_lap is not None:
+            f = (row["t_ms"] - t_lap) / 1000 / lap_s
+            if 0 <= f <= 1.2:
+                out["laptop"] = round(min(f, 0.999), 3)
+        out["lap_s"] = lap_s
+        if "robot" not in out:
+            out["why"] = ("robot: lap mark not found yet / laps not regular" if "ph" in row
+                          else "old firmware: no position from the robot")
+        return out
+
+    def ww_report(self):
+        """Your wrong-way marks vs the robot's own detection (this session)."""
+        L = self.link
+        with L.lock:
+            marks, det = list(L.ww_marks), list(L.ww_events)
+        periods, start = [], None
+        for t, wrong in marks:
+            if wrong and start is None:
+                start = t
+            elif not wrong and start is not None:
+                periods.append((start, t))
+                start = None
+        if start is not None:
+            periods.append((start, time.time()))
+        starts = [t for t, d in det if d]
+        hits, delays = 0, []
+        for a, b in periods:
+            ds = [t for t in starts if a - 3 <= t <= b]
+            if ds:
+                hits += 1
+                delays.append(max(0.0, ds[0] - a))
+        false = sum(1 for t in starts if not any(a - 3 <= t <= b + 3 for a, b in periods))
+        return {"periods": len(periods), "detected": hits, "false_alarms": false,
+                "delay": round(sum(delays) / len(delays), 1) if delays else None,
+                "series": [list(x) for x in list(L.series)[-450:]],
+                "marks": [[round(a, 1), round(b, 1)] for a, b in periods],
+                "detections": [[round(t, 1), d] for t, d in det[-40:]]}
 
     def state(self, since):
         L = self.link
@@ -574,6 +645,7 @@ class App:
             "pos": self.live_position(), "analysis_ver": self.analysis_ver,
             "speedtest": self.speedtest.to_json(), "tracks": tm.list_tracks(),
             "geometry": self.geom() or {}, "calib": self.calib(), "placement": self.placement,
+            "ww": self.ww_report(), "now": time.time(),
         }
 
 
@@ -636,6 +708,11 @@ class Handler(BaseHTTPRequestHandler):
             code = d.get("code")
             if code in MARKS:
                 text, cmd = MARKS[code]
+                if code in ("wrong", "ok"):
+                    APP.ww_want = code == "wrong"
+                    APP.ww_sent = time.time()
+                    with L.lock:
+                        L.ww_marks.append((time.time(), code == "wrong"))
             else:
                 text = re.sub(r"\s+", " ", str(d.get("text", ""))).strip()[:60]
                 if not text:

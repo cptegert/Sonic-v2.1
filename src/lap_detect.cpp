@@ -24,6 +24,8 @@ void speedmap_lap_done(bool consistent);                // speed_map.cpp
 bool speedmap_saved_template(float *out);               // fingerprint of this track
 void speedmap_template_learned(const float *t);
 const char *speedmap_track_name();
+int speedmap_lap_margin();                              // average closest side distance per part, -1 = n/a
+void speedmap_wheels_cleaned();
 
 static float medianRecent() {
   float t[5];
@@ -50,9 +52,139 @@ void lap_note(LapEvent ev) {
 
 static void logLapSummary(int lapNo, float lapS) {
   uint32_t n = st.loops ? st.loops : 1;
-  logEvent("LAPSUM %d %.2fs rev%d trap%d notmov%d blind%d minwall%dcm lock%d%% minspd%d%% spd%dus",
+  char margin[16] = "";
+  int m = speedmap_lap_margin();
+  if (m >= 0) snprintf(margin, sizeof(margin), " margin%dcm", m);
+  logEvent("LAPSUM %d %.2fs rev%d trap%d notmov%d blind%d minwall%dcm lock%d%% minspd%d%% spd%dus%s",
            lapNo, lapS, st.reverses, st.trapped, st.notMoving, st.blind, st.minWall,
-           (int)(100 * st.lockLoops / n), (int)(100 * st.minSpeedLoops / n), (int)(st.speedSum / n));
+           (int)(100 * st.lockLoops / n), (int)(100 * st.minSpeedLoops / n), (int)(st.speedSum / n), margin);
+}
+
+// ---------------------------------------------------------------------------
+// Whole-lap signature (2026-11-22): steering + (right - left) of a regular lap,
+// averaged over laps, 100 ms steps. Two trackers follow the robot along it: one
+// assumes it drives forwards (its place moves forward 0-2 steps per sample), one
+// assumes it drives the track BACKWARDS (time reversed, left/right swapped, place
+// moves backwards). Each blends in how well the last 1.5 s fit there. Backwards
+// clearly better than forwards for 0.5 s = "WRONG WAY?". Also gives the position
+// from the sensors alone. LOGGING ONLY: nothing in the driving uses it (yet).
+// Note: on a figure-8 the turns come in the same order backwards -> can't tell.
+// ---------------------------------------------------------------------------
+#define SIG_MAX 200            // samples = 20 s lap max
+#define WW_WIN 15              // 1.5 s compared each step
+#define WW_ALPHA 0.08f
+static float sigS[SIG_MAX], sigR[SIG_MAX];     // steering -1..1, (right-left)/100
+static int sigN = 0;
+static float recS[SIG_MAX], recR[SIG_MAX];
+static int recN = 0;
+static bool recOk = false;
+static float histS[WW_WIN], histR[WW_WIN];
+static int histPos = 0, histN = 0;
+static float trF[SIG_MAX], trB[SIG_MAX], tmpF[SIG_MAX], tmpB[SIG_MAX];
+static int trWarm = 0;
+static int wwFwd = 0, wwRev = 0, wwPos = -1, wwCount = 0;
+static bool wwDetected = false;
+
+static void sigLapStart() { recN = 0; recOk = true; }
+
+static void sigRecord(float st, float rl, bool disturbed) {
+  if (!recOk) return;
+  if (disturbed || recN >= SIG_MAX) { recOk = false; return; }
+  recS[recN] = st;
+  recR[recN] = rl;
+  recN++;
+}
+
+static void trackerReset() {
+  for (int k = 0; k < SIG_MAX; k++) trF[k] = trB[k] = 0;
+  trWarm = 0;
+  histN = 0;
+  wwDetected = false;
+  wwCount = 0;
+}
+
+static void sigLapDone(bool consistent) {
+  if (consistent && recOk && recN >= 3 * WW_WIN) {
+    if (sigN == 0 || abs(recN - sigN) > sigN / 6) {
+      bool first = sigN == 0;
+      memcpy(sigS, recS, recN * sizeof(float));
+      memcpy(sigR, recR, recN * sizeof(float));
+      sigN = recN;
+      trackerReset();
+      if (first) logEvent("lap signature learned (%d samples): wrong-way check on", sigN);
+    } else {
+      for (int i = 0; i < sigN; i++) {   // blend in, stretched to the signature length
+        float x = i * (recN - 1) / (float)(sigN - 1);
+        int a = (int)x;
+        float f = x - a;
+        int b = a + 1 < recN ? a + 1 : a;
+        sigS[i] = 0.7f * sigS[i] + 0.3f * (recS[a] * (1 - f) + recS[b] * f);
+        sigR[i] = 0.7f * sigR[i] + 0.3f * (recR[a] * (1 - f) + recR[b] * f);
+      }
+    }
+  }
+  sigLapStart();
+}
+
+// cosine similarity of the last WW_WIN samples with the signature at place k
+static float segCos(int k, bool backwards) {
+  float dot = 0, nw = 0, ns = 0;
+  for (int j = 0; j < WW_WIN; j++) {
+    int h = (histPos + j) % WW_WIN;                     // oldest first
+    int idx = backwards ? (k + WW_WIN - 1 - j) : (k + j);
+    idx %= sigN;
+    float s1 = backwards ? -sigS[idx] : sigS[idx];
+    float s2 = backwards ? -sigR[idx] : sigR[idx];
+    dot += histS[h] * s1 + histR[h] * s2;
+    nw += histS[h] * histS[h] + histR[h] * histR[h];
+    ns += s1 * s1 + s2 * s2;
+  }
+  return (nw > 1e-6f && ns > 1e-6f) ? dot / sqrtf(nw * ns) : 0;
+}
+
+static void wrongWayCheck(float st, float rl, bool disturbed) {
+  histS[histPos] = st;
+  histR[histPos] = rl;
+  histPos = (histPos + 1) % WW_WIN;
+  if (histN < WW_WIN) histN++;
+  if (sigN < 3 * WW_WIN || histN < WW_WIN) { wwFwd = wwRev = 0; wwPos = -1; return; }
+  if (disturbed) return;                                // reversing / stuck: hold
+  int n = sigN;
+  float bf = -1, bb = -1;
+  int bk = 0;
+  for (int k = 0; k < n; k++) {
+    float pf = trF[k], a1 = trF[(k + n - 1) % n], a2 = trF[(k + n - 2) % n];
+    if (a1 > pf) pf = a1;
+    if (a2 > pf) pf = a2;
+    float pb = trB[k], b1 = trB[(k + 1) % n], b2 = trB[(k + 2) % n];
+    if (b1 > pb) pb = b1;
+    if (b2 > pb) pb = b2;
+    tmpF[k] = (1 - WW_ALPHA) * pf + WW_ALPHA * segCos(k, false);
+    tmpB[k] = (1 - WW_ALPHA) * pb + WW_ALPHA * segCos(k, true);
+    if (tmpF[k] > bf) { bf = tmpF[k]; bk = k; }
+    if (tmpB[k] > bb) bb = tmpB[k];
+  }
+  memcpy(trF, tmpF, n * sizeof(float));
+  memcpy(trB, tmpB, n * sizeof(float));
+  wwFwd = (int)(bf * 100);
+  wwRev = (int)(bb * 100);
+  wwPos = ((bk + WW_WIN - 1) % n) * 1000 / n;           // end of the window = now
+  if (trWarm < 30) { trWarm++; return; }                // 3 s to settle
+  if (!wwDetected) {
+    wwCount = (bb > bf + WW_MARGIN) ? wwCount + 1 : 0;
+    if (wwCount >= WW_SAMPLES) {
+      wwDetected = true;
+      wwCount = 0;
+      logEvent("WRONG WAY? detected (back %.2f / fwd %.2f)", bb, bf);
+    }
+  } else {
+    wwCount = (bf > bb + WW_MARGIN) ? wwCount + 1 : 0;
+    if (wwCount >= WW_SAMPLES) {
+      wwDetected = false;
+      wwCount = 0;
+      logEvent("right way again (detected: fwd %.2f / back %.2f)", bf, bb);
+    }
+  }
 }
 
 // window in chronological order, normalized (mean 0, unit length); false if flat
@@ -87,6 +219,9 @@ static void learnTemplate(uint32_t now) {
   synced = true;
   tmplProven = false;
   tmplLaps = 0;
+  sigN = 0;            // new lap mark: the signature starts at the old one -> learn it again
+  trackerReset();
+  sigLapStart();
   lastLapMs = now;
   resetStats();  // lap statistics count from the fingerprint point
   prevC = prevPrevC = 0;
@@ -121,6 +256,8 @@ void lap_update(const LapSample &s) {
     lastSampleMs = now - LAP_SAMPLE_MS;
     bufPos = bufCount = 0;
     wrongWay = false;
+    trackerReset();
+    recOk = false;
     // Fingerprint saved with this track: look for the SAME lap mark as last time,
     // so the speed map (parts counted from the lap mark) lines up again. Not found
     // within LAP_RELEARN_MS -> a new fingerprint is learned (and the map resets).
@@ -144,6 +281,8 @@ void lap_update(const LapSample &s) {
   bufDisturbed[bufPos] = disturbed;
   bufPos = (bufPos + 1) % LAP_WINDOW;
   if (bufCount < LAP_WINDOW) { bufCount++; return; }
+  wrongWayCheck(s.steer, (rightCm - leftCm) / 100.0f, s.disturbed);
+  if (synced) sigRecord(s.steer, (rightCm - leftCm) / 100.0f, disturbed || wwDetected);
 
   // (re)learn the fingerprint: after the start, and when no lap for a long time
   // No lap for a while with a fingerprint that is known to work (pushed, turned
@@ -174,6 +313,7 @@ void lap_update(const LapSample &s) {
     tmplProven = true;
     lastLapMs = prevSampleMs;
     resetStats();
+    sigLapStart();
     logEvent("lap mark found (match %.2f)", prevC);
   } else if (synced && prevC > LAP_THRESHOLD && prevC >= c && prevC > prevPrevC && prevSampleMs - lastLapMs >= LAP_MIN_MS) {
     lastLapS = (prevSampleMs - lastLapMs) / 1000.0f;
@@ -188,6 +328,7 @@ void lap_update(const LapSample &s) {
     logEvent("LAP %d: %.2f s (match %.2f)", laps, lastLapS, prevC);
     logLapSummary(laps, lastLapS);
     resetStats();
+    sigLapDone(lastConsistent);
     speedmap_lap_done(lastConsistent);
   }
   prevPrevC = prevC;
@@ -214,6 +355,15 @@ float lap_median_s() { return recentN >= LAP_POS_MIN_LAPS ? medianRecent() : 0; 
 
 bool lap_wrong_way() { return wrongWay; }
 
+void lap_ww(int *fwd100, int *back100, int *pos1000, bool *detected) {
+  *fwd100 = wwFwd; *back100 = wwRev; *pos1000 = wwPos; *detected = wwDetected;
+}
+
+int lap_phase_permille() {
+  float ph;
+  return lap_position(&ph) ? (int)(ph * 1000) : -1;
+}
+
 // "mark <text>": your note in the robot's log (from the laptop dashboard buttons).
 // "mark wrong..." = driving the wrong way: no lap learning / speed map learning
 // until "mark ok" (or "mark right...") or the next start.
@@ -221,6 +371,7 @@ bool lap_command(const char *cmd, Print &out) {
   if (strncmp(cmd, "mark", 4) != 0 || (cmd[4] != 0 && cmd[4] != ' ')) return false;
   const char *text = cmd[4] ? cmd + 5 : "";
   if (strncmp(text, "wrong", 5) == 0) wrongWay = true;
+  else if (strncmp(text, "clean", 5) == 0) speedmap_wheels_cleaned();
   else if (strncmp(text, "ok", 2) == 0 || strncmp(text, "right", 5) == 0) wrongWay = false;
   logEvent("MARK %s%s", text[0] ? text : "-", wrongWay ? " (wrong way: not learning)" : "");
   out.printf("marked: %s\n", text);

@@ -36,6 +36,7 @@ struct LapSample {
   bool fullLock;           // steering at full lock
   bool minSpeed;           // speed command at the minimum
   int speedUs;             // motor command
+  float steer;             // steering -1 (right) .. +1 (left)
 };
 void lap_update(const LapSample &s);
 
@@ -55,5 +56,11 @@ bool lap_last_consistent();        // was the lap that just ended a regular one?
 float lap_median_s();              // median of the recent laps (0 = not enough laps)
 bool lap_wrong_way();              // you marked "wrong way" (dashboard button)
 bool lap_command(const char *cmd, Print &out);   // mark <text>
+
+// Whole-lap signature: position from the sensors + wrong-way detection (logging only)
+#define WW_MARGIN     0.10f   // backwards tracker this much better than forwards ...
+#define WW_SAMPLES    5       // ... for 5 samples in a row (0.5 s)
+void lap_ww(int *fwd100, int *back100, int *pos1000, bool *detected);
+int lap_phase_permille();          // position the robot assumes (timing), -1 = unknown
 
 #endif

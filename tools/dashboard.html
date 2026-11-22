@@ -55,6 +55,16 @@ input[type=number]{width:80px}
 .bar{height:10px;background:var(--acc);border-radius:3px}
 .err{color:var(--bad)}
 .palette button{min-width:74px}
+.card>h2{cursor:pointer;user-select:none}
+.card>h2::before{content:"▾";color:var(--muted);font-size:12px;width:10px}
+.card.closed>h2::before{content:"▸"}
+.card.closed>h2{margin-bottom:0}
+.card.closed>.body{display:none}
+.steps{margin:6px 0 8px;padding-left:20px}.steps li{margin:2px 0}
+.chk{display:inline-block;width:18px;text-align:center;font-weight:700}
+.chk.ok{color:var(--ok)}.chk.no{color:var(--bad)}.chk.warn{color:var(--warn)}
+.phase{font-size:18px;font-weight:700;margin:6px 0}
+.legend .sw{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-1px;margin:0 3px 0 10px}
 .palette button svg{width:34px;height:34px;display:block;margin:0 auto 2px}
 </style></head><body>
 <header>
@@ -70,7 +80,7 @@ input[type=number]{width:80px}
 </header>
 <main>
 <div class="col">
-  <section class="card">
+  <section class="card" data-card="marks">
     <h2>Marks <small>exact time in the log, also sent to the robot</small></h2>
     <div class="row marks">
       <button id="wrongBtn" class="big" data-code="wrong">⟲ Wrong way</button>
@@ -81,12 +91,13 @@ input[type=number]{width:80px}
       <button data-code="stopped">Stopped</button>
       <button data-code="normal">Back to normal</button>
       <button data-code="start">Test start</button>
+      <button data-code="cleaned" title="Robot: slowed parts recover most of the way, it relearns how close to the walls it usually gets">🧽 Wheels cleaned</button>
     </div>
     <div class="row" style="margin-top:8px"><input id="markText" placeholder="your own note… (Enter)" style="flex:1;min-width:160px"><button id="markAdd">Add note</button></div>
     <div class="small muted" id="markInfo" style="margin-top:6px">“Wrong way” pauses the robot's lap and speed-map learning until you press “Right way again”.</div>
   </section>
 
-  <section class="card">
+  <section class="card" data-card="track">
     <h2>Track <small id="trackInfo"></small></h2>
     <div class="row tabs">
       <button data-view="map" class="on">Map</button>
@@ -99,7 +110,9 @@ input[type=number]{width:80px}
         <button data-shape="yours">Your track</button><button data-shape="robot">Robot's estimate</button>
         <span class="muted small" style="margin-left:10px">Colour:</span>
         <button data-layer="speed" class="on">Speed</button><button data-layer="trouble">Trouble</button><button data-layer="map">Speed map</button>
+        <label class="small" style="margin-left:10px"><input type="checkbox" id="ovChk" checked> robot's shape guess</label>
       </div>
+      <div class="legend" id="posLegend"></div>
       <div class="trackbox"><svg id="trackSvg" viewBox="0 0 1000 700"></svg></div>
       <div class="row" id="placeRow" style="margin-top:6px">
         <button id="placeBtn" title="Click the tile where you put the robot; click again to turn it">📍 Place robot for the next drive</button>
@@ -145,20 +158,35 @@ input[type=number]{width:80px}
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" data-card="speedlap">
+    <h2>Speed along the lap <small>how fast the robot drives where (average of all laps)</small></h2>
+    <svg id="speedChart" viewBox="0 0 1000 260"></svg>
+    <div class="legend">Thick line = average speed command, band = slowest–fastest 10 % of laps, dashed = learned speed map (right axis). Below: turns and hills. Live: blue line = robot now.</div>
+  </section>
+
+  <section class="card" data-card="wrongway">
+    <h2>Wrong-way detection <small>does the robot notice by itself? (logging only, it does not react yet)</small></h2>
+    <div id="wwNote" class="small"></div>
+    <svg id="wwChart" viewBox="0 0 1000 200" style="margin-top:6px"></svg>
+    <div class="legend"><span class="sw" style="background:var(--ok)"></span>forward match <span class="sw" style="background:var(--bad)"></span>backward match <span class="sw" style="background:var(--bad);opacity:.25;border-radius:2px"></span>you marked wrong way <span class="sw" style="background:var(--warn);border-radius:2px"></span>robot says WRONG WAY. Last 90 s.</div>
+    <div id="wwScore" style="margin-top:6px"></div>
+  </section>
+
+  <section class="card" data-card="laps">
     <h2>Laps <small id="lapSummary"></small></h2>
     <svg id="lapChart" viewBox="0 0 1000 160"></svg>
+    <div class="legend">Bars = lap time (red: reverse/trapped/stuck, orange: touched the wall). <span style="color:var(--acc)">Blue line = margin</span>: how close to the walls (average of the closest point per part) – falling lap after lap = less grip (dirty wheels).</div>
     <div class="scroll"><table id="lapTable"></table></div>
   </section>
 
-  <section class="card">
+  <section class="card" data-card="parts" data-closed="1">
     <h2>Track parts <small>20 parts from the lap mark, averaged over all laps</small></h2>
     <div class="scroll"><table id="partsTable"></table></div>
   </section>
 </div>
 
 <div class="col">
-  <section class="card">
+  <section class="card" data-card="live">
     <h2>Live</h2>
     <div class="row" style="gap:16px">
       <span class="kv">speed <b id="lSpd">-</b></span><span class="kv">steer <b id="lStr">-</b></span>
@@ -169,26 +197,36 @@ input[type=number]{width:80px}
     <div class="senslab"><span>FFL</span><span>FL</span><span>L</span><span>M</span><span>R</span><span>FR</span><span>FFR</span></div>
   </section>
 
-  <section class="card">
-    <h2>Speed calibration <small>for this track: drives several speeds, scores laps per minute</small></h2>
+  <section class="card" data-card="speedtest" data-closed="1">
+    <h2>Speed calibration <small>find the best speed for this track</small></h2>
+    <div class="small">The laptop drives the robot by itself at several speeds, one run per speed (repeated), and counts the laps per minute. Crashes and reversing cost time, so the best score = fastest <i>reliable</i> speed.</div>
+    <ol class="steps small">
+      <li><span class="chk" id="c1"></span> Robot switched on, laptop connected to it (green “Wi-Fi live” at the top)</li>
+      <li><span class="chk" id="c2"></span> Main switch OFF in the app / button not pressed (robot not driving)</li>
+      <li><span class="chk" id="c3"></span> Manual mode OFF</li>
+      <li><span class="chk" id="c4"></span> Phone app disconnected – it would overwrite the speed</li>
+      <li><label><input type="checkbox" id="c5"> Robot is on the track, ready to go, someone watches it</label></li>
+    </ol>
     <div class="row">
       <label>speeds <input id="stSpeeds" value="50,55,60,65,70" style="width:150px"></label>
-      <label>× <input id="stRepeat" type="number" value="2" min="1" max="5"></label>
-      <label>s/run <input id="stDur" type="number" value="40" min="15" max="120"></label>
+      <label>each × <input id="stRepeat" type="number" value="2" min="1" max="5"></label>
+      <label>seconds per run <input id="stDur" type="number" value="40" min="15" max="120"></label>
+      <span class="small muted" id="stTime"></span>
     </div>
     <div class="row" style="margin-top:8px">
       <button id="stStart" class="primary">Start</button><button id="stPause">Pause after this run</button>
       <button id="stResume">Continue</button><button id="stStop" class="danger">Stop now</button>
       <span id="stState" class="small"></span>
     </div>
-    <div class="small muted" style="margin-top:6px">Robot on the track, main switch OFF, manual OFF, app closed (it would overwrite the speed). Each run: 5 s countdown, drives, stops by itself (also if the Wi-Fi link drops). Pause = waits after the current run (battery swap). Your speed is put back at the end.</div>
+    <div id="stPhase" class="phase"></div>
+    <div class="small muted">Each run: 5 s countdown → drives → stops by itself (also if the Wi-Fi drops) → short break → next speed, from wherever it stopped. “Pause after this run” = e.g. battery swap, then Continue. Your speed is put back at the end; “Apply” saves the best one.</div>
     <table id="stTable" style="margin-top:8px"></table>
     <div id="stBest" class="row" style="margin-top:6px"></div>
     <div id="stLog" class="small muted" style="max-height:120px;overflow:auto;margin-top:6px;white-space:pre-wrap"></div>
     <details style="margin-top:6px"><summary class="small">Earlier results on this track</summary><div id="stPast" class="small"></div></details>
   </section>
 
-  <section class="card">
+  <section class="card" data-card="log">
     <h2>Robot log</h2>
     <div id="log"></div>
     <div class="row" style="margin-top:6px">
@@ -198,7 +236,7 @@ input[type=number]{width:80px}
     <label class="small muted"><input type="checkbox" id="quiet" checked> hide routine lines</label>
   </section>
 
-  <section class="card">
+  <section class="card" data-card="size" data-closed="1">
     <h2>Robot size <small>makes the shape estimate better</small></h2>
     <div class="row">
       <label>wheelbase cm <input id="gWb" type="number" step="0.5"></label>
@@ -279,7 +317,8 @@ function renderState() {
   }
   while (log.childNodes.length > 800) log.removeChild(log.firstChild);
   if (atBottom) log.scrollTop = log.scrollHeight;
-  renderLaps(); renderSpeedTest(); renderRobot();
+  renderLaps(); renderSpeedTest(); renderRobot(); renderPosLegend(); renderWrongWay();
+  posAt = performance.now();
 }
 
 // ---------------------------------------------------------------- laps
@@ -293,9 +332,10 @@ function renderLaps() {
     const h = Math.min(150, l.s / maxT * 150), bad = l.rev || l.trap || l.notmov || l.blind;
     const col = bad ? 'var(--bad)' : l.minwall < 5 ? 'var(--warn)' : 'var(--ok)';
     return `<rect x="${i * w + 2}" y="${155 - h}" width="${w - 4}" height="${h}" rx="2" fill="${col}"><title>lap ${l.lap}: ${l.s} s</title></rect>`;
-  }).join('') + `<line x1="0" x2="1000" y1="${155 - med / maxT * 150}" y2="${155 - med / maxT * 150}" stroke="var(--muted)" stroke-dasharray="6 6"/>`;
-  $('#lapTable').innerHTML = '<tr><th>lap</th><th>time</th><th>reverse</th><th>trapped</th><th>not moving</th><th>blind</th><th>closest</th><th>full lock</th><th>speed</th></tr>' +
-    laps.slice().reverse().map(l => `<tr><td>${l.lap}</td><td>${l.s.toFixed(2)} s</td><td>${l.rev || ''}</td><td>${l.trap || ''}</td><td>${l.notmov || ''}</td><td>${l.blind || ''}</td><td>${l.minwall} cm</td><td>${l.lock}%</td><td>${l.spd}</td></tr>`).join('');
+  }).join('') + `<line x1="0" x2="1000" y1="${155 - med / maxT * 150}" y2="${155 - med / maxT * 150}" stroke="var(--muted)" stroke-dasharray="6 6"/>` +
+    (laps.some(l => l.margin != null) ? `<polyline points="${laps.map((l, i) => l.margin == null ? '' : `${i * w + w / 2},${155 - Math.min(60, l.margin) / 60 * 150}`).filter(Boolean).join(' ')}" fill="none" stroke="var(--acc)" stroke-width="3"/>` : '');
+  $('#lapTable').innerHTML = '<tr><th>lap</th><th>time</th><th>reverse</th><th>trapped</th><th>not moving</th><th>blind</th><th>closest</th><th>full lock</th><th>speed</th><th>margin</th></tr>' +
+    laps.slice().reverse().map(l => `<tr><td>${l.lap}</td><td>${l.s.toFixed(2)} s</td><td>${l.rev || ''}</td><td>${l.trap || ''}</td><td>${l.notmov || ''}</td><td>${l.blind || ''}</td><td>${l.minwall} cm</td><td>${l.lock}%</td><td>${l.spd}</td><td>${l.margin != null ? l.margin + ' cm' : ''}</td></tr>`).join('');
 }
 
 // ---------------------------------------------------------------- tiles
@@ -335,6 +375,13 @@ function binColour(p, i) {
   const f = p.smf[i]; return f > 0.97 ? 'var(--ok)' : f > 0.8 ? 'var(--warn)' : 'var(--bad)';
 }
 const LEG = {speed: 'Speed command: blue = slow … red = fast.', trouble: 'Trouble: red = near the wall or reversing in > 30 % of laps, orange = sometimes / mostly full lock, green = fine.', map: 'Learned speed map: green = full speed, orange = slowed to 80–97 %, red = below 80 %.'};
+function fitFn(xy, W = 1000, H = 700, pad = 60) {
+  const xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
+  const mnx = Math.min(...xs), mny = Math.min(...ys), w = Math.max(...xs) - mnx || 1, h = Math.max(...ys) - mny || 1;
+  const sc = Math.min((W - 2 * pad) / w, (H - 2 * pad) / h), ox = (W - w * sc) / 2, oy = (H - h * sc) / 2;
+  return ([x, y]) => [ox + (x - mnx) * sc, oy + (y - mny) * sc];
+}
+let mapPts = null, posAt = 0;
 function fit(xy, W = 1000, H = 700, pad = 60) {
   const xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
   const mnx = Math.min(...xs), mny = Math.min(...ys), w = Math.max(...xs) - mnx || 1, h = Math.max(...ys) - mny || 1;
@@ -348,7 +395,7 @@ function drawMap() {
   $$('[data-layer]').forEach(b => b.classList.toggle('on', b.dataset.layer === layer));
   $('#legend').textContent = LEG[layer];
   let out = '';
-  const pos = S && S.pos != null ? Math.min(N - 1, Math.floor(S.pos * N)) : null;
+  mapPts = null;
   const lay = A && A.layout;
   $('#placeRow').classList.toggle('hide', !(lay && lay.tiles && lay.tiles.length));
   if (lay && lay.tiles && lay.tiles.length) {
@@ -368,7 +415,8 @@ function drawMap() {
     if (m && p) {
       for (let k = 0; k < PARTS; k++) { const q = P[m.bin_to_draw[k * N / PARTS]]; out += `<text x="${q[0] + 8}" y="${q[1] - 8}" fill="var(--fg)" font-size="${Math.max(13, C * .22)}" font-weight="600">${k + 1}</text>`; }
       const q0 = P[m.bin_to_draw[0]]; out += `<circle cx="${q0[0]}" cy="${q0[1]}" r="9" fill="var(--fg)"/>` + arrow(q0, P[m.bin_to_draw[3]]);
-      if (pos != null) { const q = P[m.bin_to_draw[pos]]; out += `<circle cx="${q[0]}" cy="${q[1]}" r="16" fill="none" stroke="var(--acc)" stroke-width="5"/><circle cx="${q[0]}" cy="${q[1]}" r="6" fill="var(--acc)"/>`; }
+      mapPts = m.bin_to_draw.map(j => P[j]);
+      if (A.overlay && $('#ovChk').checked) out += `<polyline points="${A.overlay.points.map(px).map(q => q.join(',')).join(' ')} ${px(A.overlay.points[0]).join(',')}" fill="none" stroke="var(--fg)" stroke-width="2.5" stroke-dasharray="8 6" opacity=".75"/>`;
     }
     const pl = S && S.placement, last = dr.start;
     if (pl) out += robotSvg(pl, F.ox + (pl.x - F.mnx) * C, F.oy + (pl.y - F.mny) * C, C);
@@ -384,7 +432,8 @@ function drawMap() {
     if (m && p) {
       for (let k = 0; k < PARTS; k++) { const q = P[m.bin_to_draw[k * N / PARTS]]; out += `<text x="${q[0] + 12}" y="${q[1] - 12}" fill="var(--muted)" font-size="20">${k + 1}</text>`; }
       const q0 = P[m.bin_to_draw[0]]; out += `<circle cx="${q0[0]}" cy="${q0[1]}" r="9" fill="var(--fg)"/>`;
-      if (pos != null) { const q = P[m.bin_to_draw[pos]]; out += `<circle cx="${q[0]}" cy="${q[1]}" r="16" fill="none" stroke="var(--acc)" stroke-width="5"/><circle cx="${q[0]}" cy="${q[1]}" r="6" fill="var(--acc)"/>`; }
+      mapPts = m.bin_to_draw.map(j => P[j]);
+      if (A.overlay && $('#ovChk').checked) { const T = fitFn(dr.xy); out += `<polyline points="${A.overlay.points.map(T).map(q => q.join(',')).join(' ')}" fill="none" stroke="var(--fg)" stroke-width="2.5" stroke-dasharray="8 6" opacity=".75"/>`; }
       const q1 = P[m.bin_to_draw[3]]; out += arrow(q0, q1);
     }
   } else if (p) {
@@ -392,11 +441,11 @@ function drawMap() {
     for (let i = 0; i < N; i++) { const q = P[i], r = P[(i + 1) % N]; out += `<line x1="${q[0].toFixed(1)}" y1="${q[1].toFixed(1)}" x2="${r[0].toFixed(1)}" y2="${r[1].toFixed(1)}" stroke="${binColour(p, i)}" stroke-width="12" stroke-linecap="round"/>`; }
     for (let k = 0; k < PARTS; k++) { const q = P[k * N / PARTS]; out += `<text x="${q[0] + 12}" y="${q[1] - 12}" fill="var(--muted)" font-size="20">${k + 1}</text>`; }
     out += `<circle cx="${P[0][0]}" cy="${P[0][1]}" r="9" fill="var(--fg)"/>` + arrow(P[0], P[3]);
-    if (pos != null) { const q = P[pos]; out += `<circle cx="${q[0]}" cy="${q[1]}" r="16" fill="none" stroke="var(--acc)" stroke-width="5"/><circle cx="${q[0]}" cy="${q[1]}" r="6" fill="var(--acc)"/>`; }
+    mapPts = P;
   } else {
     out = `<text x="500" y="340" text-anchor="middle" fill="var(--muted)" font-size="24">No laps on this track yet – drive a few laps</text><text x="500" y="375" text-anchor="middle" fill="var(--muted)" font-size="18">(or draw your track in the third tab)</text>`;
   }
-  svg.innerHTML = out;
+  svg.innerHTML = out + '<g id="posLayer"></g>';
 }
 function arrow(a, b) {
   const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), x = a[0] + Math.cos(ang) * 34, y = a[1] + Math.sin(ang) * 34;
@@ -423,7 +472,7 @@ function renderTrack() {
   // parts table
   $('#partsTable').innerHTML = p ? '<tr><th>part</th><th>turn</th><th>speed</th><th>near wall</th><th>full lock</th><th>reverse</th><th>map</th><th>width</th><th>hill</th></tr>' +
     p.parts.map(r => `<tr><td>${r.part}</td><td>${r.turn}</td><td>${r.speed}</td><td>${r.near ? r.near + '%' : ''}</td><td>${r.lock ? r.lock + '%' : ''}</td><td>${r.rev ? r.rev + '%' : ''}</td><td>${r.smf < 0.995 ? r.smf.toFixed(2) : ''}</td><td>${r.width} cm</td><td>${hillName(r.hill)}</td></tr>`).join('') : '';
-  drawRing();
+  drawRing(); drawSpeedChart();
   // editor + notes (only when not being edited)
   if (!edit.dirty) loadEditor();
   if (document.activeElement !== $('#notes')) $('#notes').value = A.notes || '';
@@ -444,9 +493,80 @@ function drawRing() {
     out += `<text x="${CX + (R - 44) * Math.cos(am)}" y="${CY + (R - 44) * Math.sin(am) + 7}" text-anchor="middle" font-size="${t === 'straight' ? 16 : 22}" fill="var(--fg)">${g}</text>`;
     out += `<text x="${CX + (R + 28) * Math.cos(am)}" y="${CY + (R + 28) * Math.sin(am) + 5}" text-anchor="middle" font-size="13" fill="var(--muted)">${k + 1}${pr.hill ? ' ' + hillName(pr.hill) : ''}</text>`;
   }
-  if (S && S.pos != null) { const a = -Math.PI / 2 + 2 * Math.PI * Math.min(S.pos, 0.999); out += `<circle cx="${CX + R * Math.cos(a)}" cy="${CY + R * Math.sin(a)}" r="18" fill="none" stroke="var(--acc)" stroke-width="5"/>`; }
+  out += '<g id="ringPos"></g>';
   out += `<circle cx="${CX}" cy="${CY - R}" r="8" fill="var(--fg)"/><text x="${CX}" y="${CY}" text-anchor="middle" font-size="22" font-weight="600" fill="var(--fg)">${p.laps} laps</text><text x="${CX}" y="${CY + 24}" text-anchor="middle" font-size="14" fill="var(--muted)">lap ≈ ${p.lap_s.toFixed(2)} s · dot = lap mark</text>`;
   svg.innerHTML = out;
+}
+
+// ---------------------------------------------------------------- live position (smooth)
+function livePos() {
+  const P = S && S.pos; if (!P || P.lap_s == null) return {};
+  const dt = (performance.now() - posAt) / 1000 + (P.age || 0), adv = f => f == null ? null : (f + dt / P.lap_s) % 1;
+  return {robot: adv(P.robot ?? P.laptop), own: P.robot != null, sensors: adv(P.sensors)};
+}
+function animate() {
+  const lp = livePos(), L = $('#posLayer');
+  if (L) {
+    let o = '';
+    if (mapPts && lp.sensors != null) { const q = mapPts[Math.floor(lp.sensors * N) % N]; o += `<rect x="${q[0] - 11}" y="${q[1] - 11}" width="22" height="22" transform="rotate(45 ${q[0]} ${q[1]})" fill="none" stroke="var(--warn)" stroke-width="4"/>`; }
+    if (mapPts && lp.robot != null) { const q = mapPts[Math.floor(lp.robot * N) % N]; o += `<circle cx="${q[0]}" cy="${q[1]}" r="17" fill="var(--acc)" opacity=".25"/><circle cx="${q[0]}" cy="${q[1]}" r="9" fill="var(--acc)" stroke="var(--card)" stroke-width="3"/>`; }
+    L.innerHTML = o;
+  }
+  const R = $('#ringPos');
+  if (R) R.innerHTML = lp.robot == null ? '' : (() => { const a = -Math.PI / 2 + 2 * Math.PI * lp.robot; return `<circle cx="${320 + 230 * Math.cos(a)}" cy="${300 + 230 * Math.sin(a)}" r="18" fill="none" stroke="var(--acc)" stroke-width="5"/>`; })();
+  const sl = $('#speedPos');
+  if (sl) sl.innerHTML = lp.robot == null ? '' : `<line x1="${60 + lp.robot * 880}" x2="${60 + lp.robot * 880}" y1="10" y2="215" stroke="var(--acc)" stroke-width="3"/>`;
+  requestAnimationFrame(animate);
+}
+function renderPosLegend() {
+  const P = S.pos || {};
+  $('#posLegend').innerHTML = `<span class="sw" style="background:var(--acc)"></span>where the robot thinks it is${P.robot == null && P.laptop != null ? ' (laptop estimate – ' + esc(P.why || '') + ')' : ''}` +
+    `<span class="sw" style="border:3px solid var(--warn);border-radius:2px;width:9px;height:9px"></span>where its sensors match (wrong-way check)` +
+    (P.robot == null && P.laptop == null ? ` – <b>${esc(P.why || 'no position')}</b>` : '');
+}
+
+// ---------------------------------------------------------------- speed along the lap
+function drawSpeedChart() {
+  const p = A && A.profile, svg = $('#speedChart');
+  if (!p) { svg.innerHTML = '<text x="500" y="130" text-anchor="middle" fill="var(--muted)" font-size="18">no laps yet</text>'; return; }
+  const X = i => 60 + i / N * 880, lo = 1500, hi = Math.max(1900, ...(p.speed_hi || p.speed));
+  const Y = us => 190 - (us - lo) / (hi - lo) * 170, YF = f => 190 - (f - 0.5) / 0.5 * 170;
+  let o = '';
+  for (const us of [1600, 1700, 1800, 1900]) if (us <= hi) o += `<line x1="60" x2="940" y1="${Y(us)}" y2="${Y(us)}" stroke="var(--line)"/><text x="54" y="${Y(us) + 4}" text-anchor="end" font-size="12" fill="var(--muted)">${Math.round((us - 1500) / 5)}%</text>`;
+  for (const f of [0.6, 0.8, 1.0]) o += `<text x="946" y="${YF(f) + 4}" font-size="12" fill="var(--muted)">×${f.toFixed(1)}</text>`;
+  (p.parts || []).forEach((r, k) => { if (r.hill) o += `<rect x="${X(k * N / PARTS)}" y="10" width="${880 / PARTS}" height="180" fill="${HILLCOL[r.hill] || 'var(--hill)'}"/>`; });
+  if (p.speed_lo) o += `<polygon points="${p.speed_hi.map((v, i) => X(i) + ',' + Y(v)).join(' ')} ${p.speed_lo.map((v, i) => X(i) + ',' + Y(v)).reverse().join(' ')}" fill="var(--acc)" opacity=".15"/>`;
+  o += `<polyline points="${p.smf.map((v, i) => X(i) + ',' + YF(v)).join(' ')}" fill="none" stroke="var(--warn)" stroke-width="2" stroke-dasharray="6 5"/>`;
+  o += `<polyline points="${p.speed.map((v, i) => X(i) + ',' + Y(v)).join(' ')}" fill="none" stroke="var(--acc)" stroke-width="3.5"/>`;
+  for (let k = 0; k <= PARTS; k++) o += `<line x1="${X(k * N / PARTS)}" x2="${X(k * N / PARTS)}" y1="190" y2="196" stroke="var(--muted)"/>` + (k < PARTS ? `<text x="${X((k + 0.5) * N / PARTS)}" y="208" text-anchor="middle" font-size="11" fill="var(--muted)">${k + 1}</text>` : '');
+  for (const t of p.turns || []) {
+    const a = X(t.start * N), b = X((t.end < t.start ? t.end + 1 : t.end) * N);
+    o += `<rect x="${a}" y="216" width="${Math.max(4, Math.min(940, b) - a)}" height="14" rx="3" fill="${t.dir === 'L' ? 'var(--acc)' : 'var(--warn)'}" opacity=".7"/><text x="${(a + Math.min(940, b)) / 2}" y="246" text-anchor="middle" font-size="12" fill="var(--fg)">${t.dir === 'L' ? '↰' : '↱'}${p.calibrated ? ' ' + t.deg + '°' : ''}</text>`;
+  }
+  o += `<text x="60" y="258" font-size="11" fill="var(--muted)">part → (from the lap mark)</text><g id="speedPos"></g>`;
+  svg.innerHTML = o;
+}
+
+// ---------------------------------------------------------------- wrong way
+function renderWrongWay() {
+  const W = S.ww, now = S.now, t0 = now - 90, X = t => (t - t0) / 90 * 1000, Y = v => 185 - Math.max(0, Math.min(100, v)) / 100 * 170;
+  let o = `<line x1="0" x2="1000" y1="${Y(0)}" y2="${Y(0)}" stroke="var(--line)"/><line x1="0" x2="1000" y1="${Y(50)}" y2="${Y(50)}" stroke="var(--line)" stroke-dasharray="4 4"/>`;
+  const ser = W.series.filter(x => x[0] >= t0);
+  for (const [a, b] of W.marks) if (b >= t0) o += `<rect x="${X(Math.max(a, t0))}" y="10" width="${X(b) - X(Math.max(a, t0))}" height="175" fill="var(--bad)" opacity=".15"/>`;
+  let det = null;
+  for (const x of ser) { if (x[3] && det == null) det = x[0]; if (!x[3] && det != null) { o += `<rect x="${X(det)}" y="186" width="${X(x[0]) - X(det)}" height="10" fill="var(--warn)"/>`; det = null; } }
+  if (det != null) o += `<rect x="${X(det)}" y="186" width="${1000 - X(det)}" height="10" fill="var(--warn)"/>`;
+  if (ser.length > 1) {
+    o += `<polyline points="${ser.map(x => X(x[0]) + ',' + Y(x[1])).join(' ')}" fill="none" stroke="var(--ok)" stroke-width="2.5"/>`;
+    o += `<polyline points="${ser.map(x => X(x[0]) + ',' + Y(x[2])).join(' ')}" fill="none" stroke="var(--bad)" stroke-width="2.5"/>`;
+  } else o += '<text x="500" y="100" text-anchor="middle" fill="var(--muted)" font-size="16">no data yet – needs the new firmware, a few regular laps (it learns the lap first) and driving</text>';
+  $('#wwChart').innerHTML = o;
+  const look = A && A.drawing && A.drawing.backwards_lookalike;
+  $('#wwNote').innerHTML = look == null ? 'Tip: build your track from tiles – then this tells you if the track even looks different backwards.' :
+    look >= 0.8 ? `<b style="color:var(--bad)">This track looks the same driven backwards (${Math.round(look * 100)}%)</b> – e.g. a figure-8: the turns come in the same order both ways, so the robot can't tell the direction from steering and walls. Expect a poor score here; on most other tracks it's much easier.` :
+    `This track looks ${look >= 0.55 ? 'somewhat ' : 'clearly '}different backwards (similarity ${Math.round(look * 100)}%) – the robot ${look >= 0.55 ? 'may' : 'should'} be able to tell.`;
+  $('#wwScore').innerHTML = W.periods ? `Your wrong-way marks: <b>${W.periods}</b> · robot noticed <b>${W.detected}</b>${W.delay != null ? ` (after ${W.delay} s on average)` : ''} · false alarms while driving the right way: <b>${W.false_alarms}</b>` :
+    `<span class="muted small">Press “Wrong way” when it really drives the wrong way and “Right way again” after – this compares your marks with what the robot noticed. False alarms so far: ${W.false_alarms}.</span>`;
 }
 
 // ---------------------------------------------------------------- editor
@@ -580,8 +700,16 @@ $('#notesSave').onclick = () => api('/api/track/save', {notes: $('#notes').value
 
 // ---------------------------------------------------------------- speed test
 function renderSpeedTest() {
-  const t = S.speedtest, busy = ['running', 'paused', 'stopping'].includes(t.state);
-  $('#stStart').disabled = busy; $('#stPause').disabled = !busy || t.pause_req; $('#stResume').disabled = !(t.state === 'paused' || t.pause_req); $('#stStop').disabled = !busy;
+  const t = S.speedtest, busy = ['running', 'paused', 'stopping'].includes(t.state), st = S.status || {};
+  const chk = (id, ok, warn) => { const e = $(id); e.className = 'chk ' + (ok ? 'ok' : warn ? 'warn' : 'no'); e.textContent = ok ? '✓' : warn ? '!' : '✗'; };
+  const live = S.link === 'live';
+  chk('#c1', live); chk('#c2', live && st.sw === '0' && !S.driving); chk('#c3', live && st.man === '0'); chk('#c4', live && st.ble === '0', live && st.ble === '1');
+  const ready = live && st.sw === '0' && st.man === '0' && $('#c5').checked;
+  const runs = ($('#stSpeeds').value.split(',').filter(x => x.trim()).length) * (+$('#stRepeat').value || 1);
+  $('#stTime').textContent = `${runs} runs ≈ ${Math.round(runs * ((+$('#stDur').value || 40) + 20) / 60)} min`;
+  $('#stStart').disabled = busy || !ready;
+  $('#stStart').title = ready ? '' : 'tick the steps above first';
+  $('#stPhase').textContent = busy ? (t.phase || '') + (t.phase_left ? ` – ${t.phase_left} s` : '') : ''; $('#stPause').disabled = !busy || t.pause_req; $('#stResume').disabled = !(t.state === 'paused' || t.pause_req); $('#stStop').disabled = !busy;
   $('#stState').innerHTML = t.state === 'idle' ? '' : `<b>${t.state}</b>${busy ? ` – run ${t.run}/${t.total}` : ''}`;
   const rs = t.results || [], mx = Math.max(1, ...rs.map(r => r.laps_per_min || 0));
   $('#stTable').innerHTML = rs.length ? '<tr><th>speed</th><th>runs</th><th>laps/min</th><th></th><th>lap s</th><th>reverses</th><th>near wall</th></tr>' + rs.map(r =>
@@ -592,7 +720,7 @@ function renderSpeedTest() {
   $('#stLog').textContent = (t.log || []).join('\n');
 }
 $('#stStart').onclick = async () => {
-  if (!confirm('Start the speed calibration? The robot will drive by itself.')) return;
+  if (S.status && S.status.ble === '1' && !confirm('The phone app is still connected – it may overwrite the speed. Start anyway?')) return;
   const r = await api('/api/speedtest/start', {speeds: $('#stSpeeds').value, repeat: +$('#stRepeat').value, duration: +$('#stDur').value});
   if (r.error) alert(r.error);
 };
@@ -645,6 +773,17 @@ $('#trackSvg').addEventListener('click', ev => {
   const dir = pl && pl.x === x && pl.y === y ? sides[(sides.indexOf(pl.dir) + 1) % sides.length] : sides[0];
   S.placement = {x, y, dir}; api('/api/placement', {x, y, dir}); drawMap();
 });
+// collapsible cards (click the title); remembered per card
+$$('[data-card]').forEach(c => {
+  const h = c.querySelector('h2'), body = document.createElement('div'); body.className = 'body';
+  while (h.nextSibling) body.appendChild(h.nextSibling);
+  c.appendChild(body);
+  const key = 'card-' + c.dataset.card, saved = store.get(key, null);
+  if (saved === '1' || (saved === null && c.dataset.closed)) c.classList.add('closed');
+  h.onclick = e => { if (e.target.closest('select,button,input')) return; c.classList.toggle('closed'); store.set(key, c.classList.contains('closed') ? '1' : '0'); if (!c.classList.contains('closed') && A) { drawSpeedChart(); drawMap(); } };
+});
+$('#ovChk').onchange = () => drawMap();
+requestAnimationFrame(animate);
 if (location.hash === '#edit') document.querySelector('[data-view="edit"]').click();
 poll();
 </script></body></html>

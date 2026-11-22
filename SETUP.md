@@ -70,7 +70,16 @@ The dashboard shows everything live and records to `crashlogs/`:
 - **Speed calibration:** drives several speeds (robot on the track, main switch OFF,
   phone app closed), scores laps per minute, and "Apply" saves the best speed on the
   robot. Pause waits after the current run (battery swap).
-- Laps with their trouble, track parts, sensors, robot log, command line.
+- **Dirty wheels:** the robot notices when a part of the track gets closer to the
+  wall than usual (sliding wider) and slows down there. After cleaning the wheels
+  press **Wheels cleaned**: the slowed parts recover at once. The blue "margin" line
+  in the laps chart falling lap after lap = time to clean.
+- **Wrong-way detection** (logging only): the robot compares its steering and wall
+  distances with the learned lap, forwards and backwards. The panel compares that
+  with your Wrong way / Right way marks. A figure-8 looks the same backwards, so
+  it can't work there - the panel tells you.
+- Laps with their trouble, speed along the lap, track parts, sensors, robot log,
+  command line. Click a section title to fold it away.
 
 One program at a time talks to the robot (close the dashboard before
 `auto_run.py` / `batch_run.py`). Old terminal viewer: `tools/log.sh shadow term`

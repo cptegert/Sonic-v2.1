@@ -438,6 +438,7 @@ void loop() {
     ls.fullLock = fabsf(steer_output - SERVO_CENTER_US) >= (SERVO_MAX_US - SERVO_CENTER_US) - 10;
     ls.minSpeed = final_speed <= 1500 + min_speed * 5 + 5;
     ls.speedUs = (int)final_speed;
+    ls.steer = (steer_output - SERVO_CENTER_US) / (float)(SERVO_MAX_US - SERVO_CENTER_US);
     lap_update(ls);
     speedmap_update(driving && manual_mode_switch == 0, (int)min(distances[0], distances[2]),
                     reversing, pidTel.trapped, false);
@@ -455,7 +456,8 @@ void loop() {
 // ============================================================================
 static const char *TELEMETRY_HEADER =
   "t_ms,loop,cyc_ms,manual,rev,trapped,FFL,FL,L,M,R,FR,FFR,left,mid,right,"
-  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap,part,smf,ww";
+  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap,part,smf,ww,"
+  "ph,wpos,wfwd,wback,wwd";
 
 void sendTelemetry(bool driving, float cycleTimeMs) {
   static bool wasDriving = false;
@@ -476,9 +478,13 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
     wifiLog_send(line);
   }
   const PidTelemetry &t = pidTel;
+  int wwFwd, wwBack, wwPos;
+  bool wwDet;
+  lap_ww(&wwFwd, &wwBack, &wwPos, &wwDet);
   snprintf(line, sizeof(line),
            "T,%lu,%lu,%.1f,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,"
-           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d,%d,%.2f,%d",
+           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d,%d,%.2f,%d,"
+           "%d,%d,%d,%d,%d",
            (unsigned long)now, (unsigned long)loopNo++, cycleTimeMs, manual_mode_switch,
            t.reversing, t.trapped,
            distancesAll[0], distancesAll[1], distancesAll[2], distancesAll[3],
@@ -487,7 +493,8 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
            t.bias, t.error, t.pTerm, t.iTerm, t.dTerm, t.pid,
            manual_mode_switch ? steer_output : t.steerUs,
            manual_mode_switch ? final_speed : t.speedUs,
-           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count(), speedmap_part() + 1, speedmap_factor(), lap_wrong_way());
+           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count(), speedmap_part() + 1, speedmap_factor(), lap_wrong_way(),
+           lap_phase_permille(), wwPos, wwFwd, wwBack, (int)wwDet);
   wifiLog_send(line);
 } 
 

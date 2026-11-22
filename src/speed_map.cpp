@@ -18,6 +18,11 @@ static bool dirty = false;             // learned something since the last save
 static bool wasDriving = false;
 static int currentPart = -1;
 static bool trackChecked = false;      // compared with mapLapS in this drive
+// Grip (2026-11-22): dirty wheels slide wider -> the same corner gets closer to the
+// wall lap after lap. Per part: closest side distance this lap, and its usual value.
+static int partMin[SPEEDMAP_PARTS];     // this lap, 999 = no data
+static float partBase[SPEEDMAP_PARTS];  // usual closest distance (0 = not known yet)
+static void resetPartMin() { for (int i = 0; i < SPEEDMAP_PARTS; i++) partMin[i] = 999; }
 
 static void key(char *buf, char c, int i) { snprintf(buf, 8, "%c%d", c, i); }
 
@@ -63,11 +68,13 @@ static void loadSlot(Preferences &p, int i) {
   mapLapS = p.getFloat(k, 0);
   key(k, 't', i);
   haveTmpl = p.getBytesLength(k) == sizeof(tmpl) && p.getBytes(k, tmpl, sizeof(tmpl)) == sizeof(tmpl);
-  for (int j = 0; j < SPEEDMAP_PARTS; j++) trouble[j] = false;
+  for (int j = 0; j < SPEEDMAP_PARTS; j++) { trouble[j] = false; partBase[j] = 0; }
   dirty = false;
 }
 
 void speedmap_begin() {
+  resetPartMin();
+  for (int i = 0; i < SPEEDMAP_PARTS; i++) partBase[i] = 0;
   Preferences p;
   p.begin("speedmap", false);
   enabled = p.getBool("on", true);
@@ -128,27 +135,63 @@ void speedmap_lap_done(bool consistent) {
   if (consistent && med > 0 && !trackChecked) {   // first regular laps of this drive
     trackChecked = true;
     bool learned = learnedAny();
-    if (learned && mapLapS > 0 && fabsf(med - mapLapS) > SPEEDMAP_NEW_TRACK * mapLapS) {
-      logEvent("new track? lap %.2f s vs map %.2f s -> speed map reset", med, mapLapS);
-      resetMap();
-    }
+    // (until 2026-11-22 this reset the map - but crash-heavy laps did that too;
+    //  tracks are named now, so only a hint)
+    if (learned && mapLapS > 0 && fabsf(med - mapLapS) > SPEEDMAP_NEW_TRACK * mapLapS)
+      logEvent("laps %.2f s vs %.2f s when the map was learned: other track? (track <name>)", med, mapLapS);
     if (!learned || mapLapS <= 0 || fabsf(med - mapLapS) > SPEEDMAP_NEW_TRACK * mapLapS) mapLapS = med;
     dirty = true;
   }
   if (consistent && med > 0) mapLapS = 0.9f * mapLapS + 0.1f * med;  // follow slow drift
   if (consistent) {
+    char drift[48] = "";
+    int dn = 0;
     for (int i = 0; i < SPEEDMAP_PARTS; i++) {
+      bool slid = false;
+      if (partMin[i] < 999) {
+        if (partBase[i] <= 0) partBase[i] = partMin[i];
+        else {
+          slid = !trouble[i] && partMin[i] < partBase[i] - GRIP_DROP_CM;
+          partBase[i] += GRIP_BASE_ALPHA * (partMin[i] - partBase[i]);
+        }
+      }
       if (trouble[i]) factor[i] -= SPEEDMAP_STEP_DOWN;
+      else if (slid) {
+        factor[i] -= GRIP_STEP_DOWN;   // getting closer to the wall than usual: less grip
+        if (dn < 40) dn += snprintf(drift + dn, sizeof(drift) - dn, " %d", i + 1);
+      }
       else factor[i] += SPEEDMAP_STEP_UP;
       if (factor[i] < SPEEDMAP_MIN_FACTOR) factor[i] = SPEEDMAP_MIN_FACTOR;
       if (factor[i] > 1.0f) factor[i] = 1.0f;
     }
     dirty = true;
+    if (dn) logEvent("grip: closer to the wall than usual in part%s -> slower there", drift);
     char buf[120];
     describe(buf, sizeof(buf));
     logEvent("%s", buf);
   }
   for (int i = 0; i < SPEEDMAP_PARTS; i++) trouble[i] = false;
+  resetPartMin();
+}
+
+int speedmap_lap_margin() {
+  int sum = 0, n = 0;
+  for (int i = 0; i < SPEEDMAP_PARTS; i++)
+    if (partMin[i] < 999) { sum += partMin[i]; n++; }
+  return n >= SPEEDMAP_PARTS / 2 ? sum / n : -1;
+}
+
+// "mark cleaned": wheels cleaned -> grip is back: slow parts recover most of the way
+// at once (they learn again if a part is still a problem), usual distances relearned
+void speedmap_wheels_cleaned() {
+  for (int i = 0; i < SPEEDMAP_PARTS; i++) {
+    factor[i] += GRIP_CLEAN_RECOVER * (1.0f - factor[i]);
+    partBase[i] = 0;
+  }
+  dirty = true;
+  char buf[120];
+  describe(buf, sizeof(buf));
+  logEvent("wheels cleaned -> %s", buf);
 }
 
 void speedmap_update(bool driving, int minSideCm, bool reversing, bool trapped, bool notMoving) {
@@ -165,6 +208,7 @@ void speedmap_update(bool driving, int minSideCm, bool reversing, bool trapped, 
   currentPart = (int)(phase * SPEEDMAP_PARTS);
   if (currentPart >= SPEEDMAP_PARTS) currentPart = SPEEDMAP_PARTS - 1;
   if (minSideCm < SPEEDMAP_NEAR_CM || reversing || trapped || notMoving) trouble[currentPart] = true;
+  if (!reversing && minSideCm < partMin[currentPart]) partMin[currentPart] = minSideCm;
 }
 
 float speedmap_factor() {
@@ -230,7 +274,7 @@ static void selectTrack(const char *name, Print &out) {
     resetMap();
     mapLapS = 0;
     haveTmpl = false;
-    for (int j = 0; j < SPEEDMAP_PARTS; j++) trouble[j] = false;
+    for (int j = 0; j < SPEEDMAP_PARTS; j++) { trouble[j] = false; partBase[j] = 0; }
     if (old.length()) logEvent("track memory full: '%s' forgotten", old.c_str());
     logEvent("track -> '%s' (new: learning from scratch)", trackName);
   }
@@ -254,6 +298,7 @@ bool speedmap_command(const char *cmd, bool driving, Print &out) {
   else if (strcmp(arg, "reset") == 0) {
     if (driving) { out.println("map reset: not while driving"); return true; }
     resetMap(); mapLapS = 0; haveTmpl = false; saveSlot();
+    for (int i = 0; i < SPEEDMAP_PARTS; i++) partBase[i] = 0;
     logEvent("speed map + lap mark of track '%s' reset", trackName);
   }
   else if (arg[0]) { out.println("map | map on | map off | map reset | track [name]"); return true; }
