@@ -22,8 +22,23 @@
 #define LAP_RELEARN_MS   20000
 #define LAP_MIN_STD_CM   4.0f    // fingerprint must have some shape
 
-// Call every loop. disturbed = reversing / trapped / manual (no fingerprint taken then)
-void lap_update(bool driving, float leftCm, float rightCm, bool disturbed);
+// Everything the lap module looks at, once per loop
+struct LapSample {
+  bool driving;
+  float leftCm, rightCm;   // blended distances (fingerprint)
+  bool disturbed;          // reversing / trapped / manual: no fingerprint taken then
+  bool reversing;          // for counting reverse manoeuvres
+  bool trapped;            // TRAPPED this loop
+  int minDistCm;           // closest of the 7 raw sensors
+  bool fullLock;           // steering at full lock
+  bool minSpeed;           // speed command at the minimum
+  int speedUs;             // motor command
+};
+void lap_update(const LapSample &s);
+
+// Events from elsewhere that go into the lap summary (LAPSUM)
+enum LapEvent : uint8_t { LAP_EV_NOT_MOVING, LAP_EV_BLIND };
+void lap_note(LapEvent ev);
 int lap_count();
 float lap_last_s();     // last lap time in s, 0 = none yet
 

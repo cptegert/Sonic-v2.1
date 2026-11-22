@@ -3,6 +3,7 @@
 #include "distance_sensors.h"   //for seeing distance values "extern int distances[3];"
 #include <Arduino.h>            //for serial printing and more? Arduino functionality
 #include "logger.h"
+#include "lap_detect.h"
 // Note: We don't include RemoteXY_Config.h here to avoid multiple definition errors.
 // Instead, we use global copies of the needed fields (declared in globals.h)
 
@@ -87,6 +88,7 @@ void autonomous_mode() {
       stillSince = now;
     } else if (now - stillSince > NOT_MOVING_MS) {
       logEvent("NOT MOVING %lu ms (lock=%d minspeed=%d) -> reverse", (unsigned long)(now - stillSince), fullLock, minSpeed);
+      lap_note(LAP_EV_NOT_MOVING);
       reversing = true;
       reverseStart = now;
       closeStart = 0;

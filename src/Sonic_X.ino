@@ -423,8 +423,21 @@ void loop() {
   snap.driving = driving;
   snap.connected = RemoteXY.connect_flag;
   snap.reversing = reversing;
-  lap_update(driving, distances[0], distances[2],
-             reversing || pidTel.trapped || manual_mode_switch == 1);
+  {
+    LapSample ls;
+    ls.driving = driving;
+    ls.leftCm = distances[0];
+    ls.rightCm = distances[2];
+    ls.disturbed = reversing || pidTel.trapped || manual_mode_switch == 1;
+    ls.reversing = reversing;
+    ls.trapped = pidTel.trapped;
+    ls.minDistCm = distancesAll[0];
+    for (int i = 1; i < 7; i++) if (distancesAll[i] < ls.minDistCm) ls.minDistCm = distancesAll[i];
+    ls.fullLock = fabsf(steer_output - SERVO_CENTER_US) >= (SERVO_MAX_US - SERVO_CENTER_US) - 10;
+    ls.minSpeed = final_speed <= 1500 + min_speed * 5 + 5;
+    ls.speedUs = (int)final_speed;
+    lap_update(ls);
+  }
   logger_loop(snap);
   switchAfterLastLoop = RemoteXY.Start_switch;
   sendTelemetry(driving, cycleTimeMs);
@@ -638,6 +651,7 @@ bool sensorFailsafe() {
       blind = true;
       blindSinceMs = millis();
       logEvent("SENSORS BLIND (%d failing) -> motor neutral", sensors_failing());
+      lap_note(LAP_EV_BLIND);
     }
     healthyLoops = 0;
   } else if (blind) {

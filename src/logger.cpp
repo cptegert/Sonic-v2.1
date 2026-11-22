@@ -27,8 +27,8 @@ static const uint32_t WIFI_STATUS_MS  = 1000 / WIFI_LOG_STATUS_HZ;
 // RTC BLACK BOX (survives software resets / watchdog / panic, not power loss)
 // ============================================================================
 #define BB_MAGIC   0x50C1C0DEu
-#define BB_EVENTS  40
-#define BB_MSG_LEN 56
+#define BB_EVENTS  32
+#define BB_MSG_LEN 96   // was 56: lap summaries need more (RTC: 32 x 100 B)
 
 struct BbEvent {
   uint32_t ms;

@@ -14,6 +14,28 @@ static int laps = 0;
 static float lastLapS = 0;
 static bool wasDriving = false;
 
+// Per-lap statistics -> "LAPSUM" line at every lap
+struct LapStats {
+  uint32_t loops, lockLoops, minSpeedLoops;
+  uint64_t speedSum;
+  int reverses, trapped, notMoving, blind, minWall;
+};
+static LapStats st;
+static bool prevReversing = false, prevTrapped = false;
+static void resetStats() { memset(&st, 0, sizeof(st)); st.minWall = 999; }
+
+void lap_note(LapEvent ev) {
+  if (ev == LAP_EV_NOT_MOVING) st.notMoving++;
+  else if (ev == LAP_EV_BLIND) st.blind++;
+}
+
+static void logLapSummary(int lapNo, float lapS) {
+  uint32_t n = st.loops ? st.loops : 1;
+  logEvent("LAPSUM %d %.2fs rev%d trap%d notmov%d blind%d minwall%dcm lock%d%% minspd%d%% spd%dus",
+           lapNo, lapS, st.reverses, st.trapped, st.notMoving, st.blind, st.minWall,
+           (int)(100 * st.lockLoops / n), (int)(100 * st.minSpeedLoops / n), (int)(st.speedSum / n));
+}
+
 // window in chronological order, normalized (mean 0, unit length); false if flat
 static bool normalizedWindow(float *out) {
   float mean = 0;
@@ -44,12 +66,27 @@ static void learnTemplate(uint32_t now) {
   memcpy(tmpl, w, sizeof(tmpl));
   haveTemplate = true;
   lastLapMs = now;
+  resetStats();  // lap statistics count from the fingerprint point
   prevC = prevPrevC = 0;
   logEvent("lap fingerprint learned (laps so far %d)", laps);
 }
 
-void lap_update(bool driving, float leftCm, float rightCm, bool disturbed) {
+void lap_update(const LapSample &s) {
+  bool driving = s.driving;
+  float leftCm = s.leftCm, rightCm = s.rightCm;
+  bool disturbed = s.disturbed;
   uint32_t now = millis();
+  if (driving) {  // statistics every loop
+    st.loops++;
+    if (s.fullLock) st.lockLoops++;
+    if (s.minSpeed) st.minSpeedLoops++;
+    st.speedSum += s.speedUs;
+    if (s.minDistCm < st.minWall) st.minWall = s.minDistCm;
+    if (s.reversing && !prevReversing) st.reverses++;
+    if (s.trapped && !prevTrapped) st.trapped++;
+    prevReversing = s.reversing;
+    prevTrapped = s.trapped;
+  }
   if (!driving) {
     if (wasDriving && laps > 0) logEvent("laps this run: %d, last %.2f s", laps, lastLapS);
     wasDriving = false;
@@ -64,6 +101,7 @@ void lap_update(bool driving, float leftCm, float rightCm, bool disturbed) {
     laps = 0;
     lastLapS = 0;
     prevC = prevPrevC = 0;
+    resetStats();
   }
   if (now - lastSampleMs < LAP_SAMPLE_MS) return;
   lastSampleMs = now;
@@ -95,6 +133,8 @@ void lap_update(bool driving, float leftCm, float rightCm, bool disturbed) {
     lastLapMs = prevSampleMs;
     laps++;
     logEvent("LAP %d: %.2f s (match %.2f)", laps, lastLapS, prevC);
+    logLapSummary(laps, lastLapS);
+    resetStats();
   }
   prevPrevC = prevC;
   prevC = c;
