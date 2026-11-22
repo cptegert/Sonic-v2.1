@@ -13,4 +13,10 @@ PY="$HOME/.platformio/penv/bin/python"
 WATCH=$!
 trap 'kill -INT $WATCH 2>/dev/null; wait $WATCH 2>/dev/null' EXIT
 sleep 6   # let it join the robot's Wi-Fi
+START=$(date +%s)
 "$PY" tools/wifi_log.py
+# a drive with laps was recorded during this log -> open the track view
+NEW=$(find crashlogs -name 'run_*.csv' -newermt "@$START" 2>/dev/null | head -1)
+if [ -n "$NEW" ]; then
+  "$PY" tools/track_map.py > /dev/null 2>&1 && echo "track view opened in the browser"
+fi
