@@ -34,12 +34,24 @@ static bool isDiary(const char *m) {
   for (const char *p : DIARY) if (strncmp(m, p, strlen(p)) == 0) return true;
   return false;
 }
+// Date from unix time without gmtime/strftime (those cost ~7 KB of heap - measured
+// on Sonic 2026-11-22). Days -> y/m/d: H. Hinnant's civil_from_days.
 static void stampOf(uint32_t ms, uint32_t boot, char *buf, size_t len) {
   if (clockBase) {
-    time_t t = (time_t)(clockBase + clockTz + ms / 1000);
-    struct tm tmv;
-    gmtime_r(&t, &tmv);
-    strftime(buf, len, "%Y-%m-%d %H:%M:%S", &tmv);
+    int64_t t = clockBase + clockTz + ms / 1000;
+    int64_t days = t / 86400;
+    int32_t sec = (int32_t)(t % 86400);
+    days += 719468;
+    int64_t era = days / 146097;
+    int32_t doe = (int32_t)(days - era * 146097);
+    int32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    int32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    int32_t mp = (5 * doy + 2) / 153;
+    int32_t d = doy - (153 * mp + 2) / 5 + 1;
+    int32_t m = mp < 10 ? mp + 3 : mp - 9;
+    int32_t y = (int32_t)(yoe + era * 400) + (m <= 2);
+    snprintf(buf, len, "%04ld-%02ld-%02ld %02ld:%02ld:%02ld", (long)y, (long)m, (long)d,
+             (long)(sec / 3600), (long)(sec / 60 % 60), (long)(sec % 60));
   } else {
     snprintf(buf, len, "boot#%lu +%.1fs", (unsigned long)boot, ms / 1000.0);
   }
@@ -368,9 +380,10 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     LittleFS.remove(ROUNDS_OLD);
     out.println("rounds cleared");
   } else if (strncmp(cmd, "clock ", 6) == 0) {
-    long long unix = 0;
-    long tz = 0;
-    if (sscanf(cmd + 6, "%lld %ld", &unix, &tz) >= 1 && unix > 1700000000LL) {
+    char *end = nullptr;
+    long long unix = strtoll(cmd + 6, &end, 10);
+    long tz = end ? strtol(end, nullptr, 10) : 0;
+    if (unix > 1700000000LL) {
       clockBase = unix - millis() / 1000;
       clockTz = tz;
       char st[32];
