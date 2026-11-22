@@ -15,6 +15,7 @@
 #include <esp_task_wdt.h>
 #include "robot_config.h"  // robot identity (name, Bluetooth, GUI, motor scale)
 #include "lap_detect.h"    // lap times from sensor data
+#include "speed_map.h"     // learned per-track-part speed reduction
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
 bool remoteCommand(const char *cmd, bool driving, Print &out);
@@ -106,6 +107,7 @@ void setup() {
   setStatusLed(pixel.Color(255, 0, 0));
   robot_identity_begin();  // which robot is this board? (stored in flash, see robot_config.h)
   logger_begin();  // logs reset reason + previous session black box
+  speedmap_begin();  // learned speed map from the last drive
   if (robotIdentityStored()) logEvent("identity: %s (%s)", robotName(), robotKey());
   else logEvent("no identity stored -> %s (set with: name <robot>)", robotName());
   // Watchdog from here on, not only in loop(): a hang during startup (e.g. a sensor
@@ -437,6 +439,8 @@ void loop() {
     ls.minSpeed = final_speed <= 1500 + min_speed * 5 + 5;
     ls.speedUs = (int)final_speed;
     lap_update(ls);
+    speedmap_update(driving && manual_mode_switch == 0, (int)min(distances[0], distances[2]),
+                    reversing, pidTel.trapped, false);
   }
   logger_loop(snap);
   switchAfterLastLoop = RemoteXY.Start_switch;
@@ -451,7 +455,7 @@ void loop() {
 // ============================================================================
 static const char *TELEMETRY_HEADER =
   "t_ms,loop,cyc_ms,manual,rev,trapped,FFL,FL,L,M,R,FR,FFR,left,mid,right,"
-  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap";
+  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap,part,smf";
 
 void sendTelemetry(bool driving, float cycleTimeMs) {
   static bool wasDriving = false;
@@ -474,7 +478,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
   const PidTelemetry &t = pidTel;
   snprintf(line, sizeof(line),
            "T,%lu,%lu,%.1f,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,"
-           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d",
+           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d,%d,%.2f",
            (unsigned long)now, (unsigned long)loopNo++, cycleTimeMs, manual_mode_switch,
            t.reversing, t.trapped,
            distancesAll[0], distancesAll[1], distancesAll[2], distancesAll[3],
@@ -483,7 +487,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
            t.bias, t.error, t.pTerm, t.iTerm, t.dTerm, t.pid,
            manual_mode_switch ? steer_output : t.steerUs,
            manual_mode_switch ? final_speed : t.speedUs,
-           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count());
+           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count(), speedmap_part() + 1, speedmap_factor());
   wifiLog_send(line);
 } 
 

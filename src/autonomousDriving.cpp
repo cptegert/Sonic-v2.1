@@ -4,6 +4,7 @@
 #include <Arduino.h>            //for serial printing and more? Arduino functionality
 #include "logger.h"
 #include "lap_detect.h"
+#include "speed_map.h"
 // Note: We don't include RemoteXY_Config.h here to avoid multiple definition errors.
 // Instead, we use global copies of the needed fields (declared in globals.h)
 
@@ -271,7 +272,10 @@ void autonomous_mode() {
 
   // ==================================GYRO=============================================
     // SLOPE DETECTION - Adjust speed based on slope using RemoteXY multipliers
-  float slope_multiplier = 1.0;  // Default: no slope adjustment
+  // Learned speed map (speed_map.h): < 1.0 in track parts that regularly go wrong
+  // (e.g. after the hill), so the robot brakes before them. No IMU, so this replaces
+  // the old gyro-based slope adjustment. Only ever slows down.
+  float slope_multiplier = speedmap_factor();
 
 
 

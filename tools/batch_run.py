@@ -21,6 +21,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import sys
 import time
 
@@ -68,6 +69,26 @@ def main():
     total_min = len(order) * (a.duration + 5 + a.pause + 10) / 60
     print(f"batch: {len(order)} runs x {a.duration} s, about {total_min:.0f} min", flush=True)
 
+    # Pause: type p + Enter at any time -> the current run finishes, then the batch
+    # waits (battery swap etc.) until Enter. q + Enter: stop after the current run.
+    pause = threading.Event()
+    quit_req = threading.Event()
+
+    def keys():
+        for line in sys.stdin:
+            c = line.strip().lower()
+            if c == "p":
+                pause.set()
+                print("   >> pause requested: waiting after the current run", flush=True)
+            elif c == "q":
+                quit_req.set()
+                print("   >> stop requested: ending after the current run", flush=True)
+            elif c == "" and pause.is_set():
+                pause.clear()
+    if sys.stdin and sys.stdin.isatty():
+        threading.Thread(target=keys, daemon=True).start()
+        print("   (p + Enter = pause after this run, e.g. battery swap; q + Enter = stop)", flush=True)
+
     results = {i: [] for i in range(len(configs))}
     aborted = None
     for n, cfg in enumerate(order, 1):
@@ -100,6 +121,19 @@ def main():
         if st["rev_pct"] > MAX_REVERSING_PCT or st["trapped"] > MAX_TRAPPED_LOOPS:
             aborted = f"run {n}: robot probably stuck or fallen over (reversing {st['rev_pct']:.0f}%, trapped {st['trapped']:.0f})"
             break
+        if quit_req.is_set():
+            aborted = f"run {n}: stopped by you (q)"
+            break
+        if pause.is_set() and n < len(order):
+            print("\n   PAUSED - swap the battery / fix the robot, put it back on the track,"
+                  "\n   switch it on, then press Enter to continue ...", flush=True)
+            while pause.is_set() and not quit_req.is_set():
+                time.sleep(0.3)
+            if quit_req.is_set():
+                aborted = f"after run {n}: stopped by you (q)"
+                break
+            print("   resuming (the robot's Wi-Fi is rejoined automatically)", flush=True)
+            time.sleep(5)
         if n < len(order):
             time.sleep(a.pause)
 

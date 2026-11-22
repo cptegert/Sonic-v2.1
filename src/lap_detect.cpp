@@ -13,6 +13,18 @@ static uint32_t prevSampleMs = 0;
 static int laps = 0;
 static float lastLapS = 0;
 static bool wasDriving = false;
+static float recent[5];       // last lap times for the median
+static int recentN = 0;
+static bool lastConsistent = false;
+void speedmap_lap_done(bool consistent);   // speed_map.cpp
+
+static float medianRecent() {
+  float t[5];
+  int n = recentN < 5 ? recentN : 5;
+  for (int i = 0; i < n; i++) t[i] = recent[i];
+  for (int i = 1; i < n; i++) for (int j = i; j > 0 && t[j] < t[j - 1]; j--) { float x = t[j]; t[j] = t[j - 1]; t[j - 1] = x; }
+  return n ? t[n / 2] : 0;
+}
 
 // Per-lap statistics -> "LAPSUM" line at every lap
 struct LapStats {
@@ -101,6 +113,8 @@ void lap_update(const LapSample &s) {
     laps = 0;
     lastLapS = 0;
     prevC = prevPrevC = 0;
+    recentN = 0;
+    lastConsistent = false;
     resetStats();
   }
   if (now - lastSampleMs < LAP_SAMPLE_MS) return;
@@ -132,9 +146,15 @@ void lap_update(const LapSample &s) {
     lastLapS = (prevSampleMs - lastLapMs) / 1000.0f;
     lastLapMs = prevSampleMs;
     laps++;
+    float med = medianRecent();
+    lastConsistent = recentN >= LAP_POS_MIN_LAPS - 1 && med > 0 &&
+                     fabsf(lastLapS - med) <= LAP_POS_TOLERANCE * med;
+    recent[recentN % 5] = lastLapS;
+    recentN++;
     logEvent("LAP %d: %.2f s (match %.2f)", laps, lastLapS, prevC);
     logLapSummary(laps, lastLapS);
     resetStats();
+    speedmap_lap_done(lastConsistent);
   }
   prevPrevC = prevC;
   prevC = c;
@@ -143,3 +163,17 @@ void lap_update(const LapSample &s) {
 
 int lap_count() { return laps; }
 float lap_last_s() { return lastLapS; }
+
+bool lap_position(float *phase) {
+  if (!wasDriving || !haveTemplate || laps < LAP_POS_MIN_LAPS || !lastConsistent) return false;
+  float med = medianRecent();
+  if (med <= 0) return false;
+  float p = (millis() - lastLapMs) / (med * 1000.0f);
+  if (p > 1.0f + LAP_POS_TOLERANCE) return false;   // overdue: lost track of the position
+  *phase = p > 0.999f ? 0.999f : p;
+  return true;
+}
+
+bool lap_last_consistent() { return lastConsistent; }
+
+float lap_median_s() { return recentN >= LAP_POS_MIN_LAPS ? medianRecent() : 0; }

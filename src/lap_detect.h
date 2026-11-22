@@ -42,4 +42,13 @@ void lap_note(LapEvent ev);
 int lap_count();
 float lap_last_s();     // last lap time in s, 0 = none yet
 
+// Position within the current lap, for the speed map. Returns false when the laps are
+// not regular enough to trust it (fewer than LAP_POS_MIN_LAPS, or the last lap
+// differs more than LAP_POS_TOLERANCE from the median of the recent laps).
+#define LAP_POS_MIN_LAPS   3
+#define LAP_POS_TOLERANCE  0.20f
+bool lap_position(float *phase);   // 0..1 = fraction of a typical lap since the lap mark
+bool lap_last_consistent();        // was the lap that just ended a regular one?
+float lap_median_s();              // median of the recent laps (0 = not enough laps)
+
 #endif
