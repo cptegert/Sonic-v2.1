@@ -45,17 +45,33 @@ Run in the project folder (a terminal in VS Code):
 New board: add `--robot sonic` (and `--erase` for a used ESP32).
 `tools/robot.py info` only shows which robot is connected.
 
-## 3. Live logging over Wi-Fi
+## 3. Live logging over Wi-Fi: the dashboard
 
 - **Linux:** `tools/log.sh shadow` (or `sonic` / `knuckles`) joins the robot's
-  Wi-Fi by itself, shows the live viewer and records to `crashlogs/`.
+  Wi-Fi by itself and opens the dashboard in the browser (http://localhost:8770).
 - **Windows:** join the robot's Wi-Fi in the Windows Wi-Fi menu
   (`Shadow-log` / `Sonic-X-log` / `Knuckles-log`, password `sonicx123`), then run
-  `tools\log.bat` (double-click or from a terminal). Simple scrolling view.
+  `tools\log.bat sonic` (or `shadow` / `knuckles`).
 
-In the viewer: type a command (`status`, `sensors`, `log`) or a **mark**
-(`!3` slower, `!4` stuck, `!5` stopped, `!7` crash, `!0` start, `!any text`) +
-Enter. `q` quits. One laptop can log one robot at a time.
+The dashboard shows everything live and records to `crashlogs/`:
+- **Marks:** buttons for wrong way / right way again / tipped / stuck / crash … and
+  your own notes. They are saved with the exact time and sent to the robot. While
+  "wrong way" is on, the robot does not learn laps or its speed map.
+- **Track:** pick or create a named track at the top. The robot keeps a speed map
+  and a lap mark per track (up to 6). A new track name = it learns from scratch.
+- **Draw / describe your track** (third tab): click the corners in driving order,
+  or type it, e.g. `S3 L90 S1 H1 L90 S3 L180 R90 L90` (S straight, L/R turn in
+  degrees, H hill). The robot's data is then placed on your drawing, and after
+  8+ laps with a good match the robot's steering is calibrated. That makes its own
+  shape guesses for new tracks better.
+- **Speed calibration:** drives several speeds (robot on the track, main switch OFF,
+  phone app closed), scores laps per minute, and "Apply" saves the best speed on the
+  robot. Pause waits after the current run (battery swap).
+- Laps with their trouble, track parts, sensors, robot log, command line.
+
+One program at a time talks to the robot (close the dashboard before
+`auto_run.py` / `batch_run.py`). Old terminal viewer: `tools/log.sh shadow term`
+or `tools\log.bat shadow term`.
 
 ## 4. RemoteXY app
 
@@ -73,4 +89,4 @@ Opening the monitor restarts the robot; wait a few seconds until it has started.
 
 ## Useful serial commands (Serial Monitor, 115200)
 
-`name`, `params`, `sensors`, `scan`, `log`, `status`, `help`
+`name`, `params`, `sensors`, `scan`, `log`, `status`, `track [name]`, `map`, `mark <text>`, `save`, `help`

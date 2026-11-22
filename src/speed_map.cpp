@@ -4,45 +4,114 @@
 #include <Preferences.h>
 #include <math.h>
 
+// ---- current track (one of TRACK_SLOTS saved ones) ----
+static char trackName[TRACK_NAME_LEN] = "default";
+static int slot = 0;
 static float factor[SPEEDMAP_PARTS];
+static float mapLapS = 0;              // typical lap time the map was learned with
+static float tmpl[LAP_WINDOW];         // lap fingerprint of this track
+static bool haveTmpl = false;
+
 static bool trouble[SPEEDMAP_PARTS];   // in the current lap
 static bool enabled = true;
 static bool dirty = false;             // learned something since the last save
 static bool wasDriving = false;
 static int currentPart = -1;
-static float mapLapS = 0;              // typical lap time the map was learned with
 static bool trackChecked = false;      // compared with mapLapS in this drive
+
+static void key(char *buf, char c, int i) { snprintf(buf, 8, "%c%d", c, i); }
 
 static void resetMap() {
   for (int i = 0; i < SPEEDMAP_PARTS; i++) factor[i] = 1.0f;
 }
 
-static void save() {
+static bool learnedAny() {
+  for (int i = 0; i < SPEEDMAP_PARTS; i++) if (factor[i] < 0.995f) return true;
+  return false;
+}
+
+static void saveSlot() {
   Preferences p;
   p.begin("speedmap", false);
-  p.putBytes("f", factor, sizeof(factor));
+  char k[8];
+  uint32_t use = p.getUInt("use", 0) + 1;
+  p.putUInt("use", use);
+  key(k, 'n', slot); p.putString(k, trackName);
+  key(k, 'f', slot); p.putBytes(k, factor, sizeof(factor));
+  key(k, 'l', slot); p.putFloat(k, mapLapS);
+  key(k, 't', slot);
+  if (haveTmpl) p.putBytes(k, tmpl, sizeof(tmpl)); else p.remove(k);
+  key(k, 'u', slot); p.putUInt(k, use);
+  p.putUChar("cur", slot);
   p.putBool("on", enabled);
-  p.putFloat("lap", mapLapS);
   p.end();
   dirty = false;
 }
 
-void speedmap_begin() {
+static void loadSlot(Preferences &p, int i) {
+  char k[8];
+  slot = i;
   resetMap();
+  key(k, 'n', i);
+  String n = p.getString(k, "");
+  strlcpy(trackName, n.length() ? n.c_str() : "default", sizeof(trackName));
+  key(k, 'f', i);
+  if (p.getBytesLength(k) == sizeof(factor)) p.getBytes(k, factor, sizeof(factor));
+  for (int j = 0; j < SPEEDMAP_PARTS; j++)  // sanity
+    if (!(factor[j] >= SPEEDMAP_MIN_FACTOR && factor[j] <= 1.0f)) factor[j] = 1.0f;
+  key(k, 'l', i);
+  mapLapS = p.getFloat(k, 0);
+  key(k, 't', i);
+  haveTmpl = p.getBytesLength(k) == sizeof(tmpl) && p.getBytes(k, tmpl, sizeof(tmpl)) == sizeof(tmpl);
+  for (int j = 0; j < SPEEDMAP_PARTS; j++) trouble[j] = false;
+  dirty = false;
+}
+
+void speedmap_begin() {
   Preferences p;
-  p.begin("speedmap", true);
-  if (p.getBytesLength("f") == sizeof(factor)) p.getBytes("f", factor, sizeof(factor));
+  p.begin("speedmap", false);
   enabled = p.getBool("on", true);
-  mapLapS = p.getFloat("lap", 0);
-  p.end();
-  for (int i = 0; i < SPEEDMAP_PARTS; i++) {  // sanity
-    if (!(factor[i] >= SPEEDMAP_MIN_FACTOR && factor[i] <= 1.0f)) factor[i] = 1.0f;
+  // firmware before named tracks: one map in "f"/"lap" -> becomes track "default"
+  if (!p.isKey("n0") && p.isKey("f")) {
+    float f[SPEEDMAP_PARTS];
+    if (p.getBytesLength("f") == sizeof(f)) {
+      p.getBytes("f", f, sizeof(f));
+      p.putBytes("f0", f, sizeof(f));
+    }
+    p.putFloat("l0", p.getFloat("lap", 0));
+    p.putString("n0", "default");
+    p.remove("f");
+    p.remove("lap");
   }
-  for (int i = 0; i < SPEEDMAP_PARTS; i++) trouble[i] = false;
+  int cur = p.getUChar("cur", 0);
+  if (cur >= TRACK_SLOTS) cur = 0;
+  loadSlot(p, cur);
+  p.end();
+}
+
+const char *speedmap_track_name() { return trackName; }
+
+// ---- lap fingerprint (lap_detect.cpp) ----
+bool speedmap_saved_template(float *out) {
+  if (!haveTmpl) return false;
+  memcpy(out, tmpl, sizeof(tmpl));
+  return true;
+}
+
+void speedmap_template_learned(const float *t) {
+  // a NEW lap mark: the parts of the old map are counted from the old mark, so the
+  // learned slow-downs would land in the wrong places -> start over
+  if (haveTmpl && learnedAny()) {
+    resetMap();
+    logEvent("new lap mark on track '%s' -> its speed map starts over", trackName);
+  }
+  memcpy(tmpl, t, sizeof(tmpl));
+  haveTmpl = true;
+  dirty = true;
 }
 
 static void describe(char *buf, size_t len) {
-  int n = snprintf(buf, len, "SPEEDMAP %s:", enabled ? "on" : "OFF");
+  int n = snprintf(buf, len, "SPEEDMAP %s [%s]:", enabled ? "on" : "OFF", trackName);
   bool any = false;
   for (int i = 0; i < SPEEDMAP_PARTS && n < (int)len - 10; i++) {
     if (factor[i] < 0.995f) {
@@ -58,8 +127,7 @@ void speedmap_lap_done(bool consistent) {
   float med = lap_median_s();
   if (consistent && med > 0 && !trackChecked) {   // first regular laps of this drive
     trackChecked = true;
-    bool learned = false;
-    for (int i = 0; i < SPEEDMAP_PARTS; i++) learned |= factor[i] < 0.995f;
+    bool learned = learnedAny();
     if (learned && mapLapS > 0 && fabsf(med - mapLapS) > SPEEDMAP_NEW_TRACK * mapLapS) {
       logEvent("new track? lap %.2f s vs map %.2f s -> speed map reset", med, mapLapS);
       resetMap();
@@ -76,7 +144,7 @@ void speedmap_lap_done(bool consistent) {
       if (factor[i] > 1.0f) factor[i] = 1.0f;
     }
     dirty = true;
-    char buf[96];
+    char buf[120];
     describe(buf, sizeof(buf));
     logEvent("%s", buf);
   }
@@ -85,7 +153,7 @@ void speedmap_lap_done(bool consistent) {
 
 void speedmap_update(bool driving, int minSideCm, bool reversing, bool trapped, bool notMoving) {
   if (!driving) {
-    if (wasDriving && dirty) save();  // keep what was learned (battery swap, power-off)
+    if (wasDriving && dirty) saveSlot();  // keep what was learned (battery swap, power-off)
     wasDriving = false;
     trackChecked = false;
     currentPart = -1;
@@ -93,7 +161,7 @@ void speedmap_update(bool driving, int minSideCm, bool reversing, bool trapped, 
   }
   wasDriving = true;
   float phase;
-  if (!lap_position(&phase)) { currentPart = -1; return; }
+  if (lap_wrong_way() || !lap_position(&phase)) { currentPart = -1; return; }
   currentPart = (int)(phase * SPEEDMAP_PARTS);
   if (currentPart >= SPEEDMAP_PARTS) currentPart = SPEEDMAP_PARTS - 1;
   if (minSideCm < SPEEDMAP_NEAR_CM || reversing || trapped || notMoving) trouble[currentPart] = true;
@@ -108,14 +176,88 @@ float speedmap_factor() {
 
 int speedmap_part() { return currentPart; }
 
-bool speedmap_command(const char *cmd, Print &out) {
+// ---- track command ----
+static void listTracks(Print &out) {
+  Preferences p;
+  p.begin("speedmap", true);
+  out.printf("track: %s  (lap %.2f s, fingerprint %s, map %s)\nsaved tracks:", trackName, mapLapS,
+             haveTmpl ? "yes" : "no", learnedAny() ? "learned" : "empty");
+  char k[8];
+  for (int i = 0; i < TRACK_SLOTS; i++) {
+    key(k, 'n', i);
+    String n = p.getString(k, "");
+    if (n.length()) out.printf(" %s%s", n.c_str(), i == slot ? "*" : "");
+  }
+  out.println();
+  p.end();
+}
+
+static bool validName(const char *n) {
+  if (!n[0] || strlen(n) >= TRACK_NAME_LEN) return false;
+  for (const char *c = n; *c; c++)
+    if (!isalnum((unsigned char)*c) && *c != '-' && *c != '_') return false;
+  return true;
+}
+
+static void selectTrack(const char *name, Print &out) {
+  if (strcmp(name, trackName) == 0) { listTracks(out); return; }
+  if (dirty) saveSlot();
+  Preferences p;
+  p.begin("speedmap", false);
+  char k[8];
+  int found = -1, empty = -1, lru = 0;
+  uint32_t lruUse = UINT32_MAX;
+  for (int i = 0; i < TRACK_SLOTS; i++) {
+    key(k, 'n', i);
+    String n = p.getString(k, "");
+    if (n == name) found = i;
+    else if (!n.length() && empty < 0) empty = i;
+    key(k, 'u', i);
+    uint32_t u = p.getUInt(k, 0);
+    if (i != slot && u < lruUse) { lruUse = u; lru = i; }
+  }
+  if (found >= 0) {
+    loadSlot(p, found);
+    p.end();
+    logEvent("track -> '%s' (known: lap %.2f s, fingerprint %s)", trackName, mapLapS, haveTmpl ? "yes" : "no");
+  } else {
+    int s = empty >= 0 ? empty : lru;
+    key(k, 'n', s);
+    String old = p.getString(k, "");
+    p.end();
+    slot = s;
+    strlcpy(trackName, name, sizeof(trackName));
+    resetMap();
+    mapLapS = 0;
+    haveTmpl = false;
+    for (int j = 0; j < SPEEDMAP_PARTS; j++) trouble[j] = false;
+    if (old.length()) logEvent("track memory full: '%s' forgotten", old.c_str());
+    logEvent("track -> '%s' (new: learning from scratch)", trackName);
+  }
+  saveSlot();  // also remembers it as the current track
+  listTracks(out);
+}
+
+bool speedmap_command(const char *cmd, bool driving, Print &out) {
+  if (strncmp(cmd, "track", 5) == 0 && (cmd[5] == 0 || cmd[5] == ' ')) {
+    const char *arg = cmd[5] ? cmd + 6 : "";
+    if (!arg[0]) { listTracks(out); return true; }
+    if (driving) { out.println("track: not while driving"); return true; }
+    if (!validName(arg)) { out.printf("track: name = letters, digits, - or _, max %d\n", TRACK_NAME_LEN - 1); return true; }
+    selectTrack(arg, out);
+    return true;
+  }
   if (strncmp(cmd, "map", 3) != 0 || (cmd[3] != 0 && cmd[3] != ' ')) return false;
   const char *arg = cmd[3] ? cmd + 4 : "";
-  if (strcmp(arg, "on") == 0) { enabled = true; save(); logEvent("speed map ON"); }
-  else if (strcmp(arg, "off") == 0) { enabled = false; save(); logEvent("speed map OFF"); }
-  else if (strcmp(arg, "reset") == 0) { resetMap(); mapLapS = 0; save(); logEvent("speed map reset"); }
-  else if (arg[0]) { out.println("map | map on | map off | map reset"); return true; }
-  char buf[96];
+  if (strcmp(arg, "on") == 0) { enabled = true; saveSlot(); logEvent("speed map ON"); }
+  else if (strcmp(arg, "off") == 0) { enabled = false; saveSlot(); logEvent("speed map OFF"); }
+  else if (strcmp(arg, "reset") == 0) {
+    if (driving) { out.println("map reset: not while driving"); return true; }
+    resetMap(); mapLapS = 0; haveTmpl = false; saveSlot();
+    logEvent("speed map + lap mark of track '%s' reset", trackName);
+  }
+  else if (arg[0]) { out.println("map | map on | map off | map reset | track [name]"); return true; }
+  char buf[120];
   describe(buf, sizeof(buf));
   out.println(buf);
   out.print("factors:");

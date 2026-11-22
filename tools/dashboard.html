@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot dashboard</title>
+<style>
+:root{--bg:#f6f6f3;--card:#fff;--fg:#1d1d1b;--muted:#6b6b66;--line:#dcdcd6;--soft:#efefea;
+--ok:#1f8a4c;--warn:#c77700;--bad:#c62828;--acc:#2f5fd0;--hill:rgba(150,95,40,.28)}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1d1d1c;--fg:#ececea;--muted:#9a9a95;--line:#353532;--soft:#262624;
+--ok:#3fbf73;--warn:#e69a2e;--bad:#ef5350;--acc:#6f95ff;--hill:rgba(200,140,70,.30)}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:8px 16px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+header h1{font-size:17px;margin:0}
+.pill{padding:2px 10px;border-radius:99px;font-weight:600;font-size:13px;background:var(--soft)}
+.pill.ok{background:var(--ok);color:#fff}.pill.bad{background:var(--bad);color:#fff}.pill.warn{background:var(--warn);color:#fff}
+.kv{color:var(--muted)}.kv b{color:var(--fg);font-variant-numeric:tabular-nums}
+main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:14px;padding:14px 16px;max-width:1500px;margin:auto}
+@media (max-width:1000px){main{grid-template-columns:1fr}}
+.col{display:flex;flex-direction:column;gap:14px;min-width:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;min-width:0}
+.card h2{font-size:15px;margin:0 0 8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.card h2 small{font-weight:400;color:var(--muted)}
+button,select,input,textarea{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+button{cursor:pointer}button:hover{border-color:var(--muted)}button:disabled{opacity:.45;cursor:default}
+button.on{border-color:var(--fg);font-weight:600}
+button.primary{background:var(--acc);border-color:var(--acc);color:#fff}
+button.danger{background:var(--bad);border-color:var(--bad);color:#fff}
+.row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.marks button{padding:8px 12px}
+.marks .big{font-weight:700;padding:10px 16px}
+.wrongon{background:var(--bad)!important;border-color:var(--bad)!important;color:#fff}
+svg{display:block;width:100%;height:auto}
+.trackbox{background:var(--soft);border-radius:8px}
+.muted{color:var(--muted)}.small{font-size:12px}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums}
+td,th{padding:3px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+th{font-weight:600;color:var(--muted);font-size:12px}
+td:first-child,th:first-child{text-align:left}
+.scroll{max-height:320px;overflow:auto}
+#log{font:12px/1.4 ui-monospace,Menlo,Consolas,monospace;height:300px;overflow:auto;background:var(--soft);border-radius:7px;padding:6px 8px;white-space:pre-wrap;word-break:break-word}
+#log .bad{color:var(--bad)}#log .warn{color:var(--warn)}#log .ok{color:var(--ok)}#log .mark{color:var(--acc);font-weight:600}
+.chip{display:inline-block;padding:1px 8px;border-radius:99px;background:var(--soft);margin:2px;font-size:13px}
+.chip.L{border-left:3px solid var(--acc)}.chip.R{border-left:3px solid var(--warn)}
+.sens{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;align-items:end;height:70px}
+.sens div{background:var(--acc);border-radius:3px 3px 0 0;min-height:2px;position:relative}
+.sens div.near{background:var(--bad)}
+.senslab{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:11px;color:var(--muted);text-align:center}
+.tabs button{border-radius:7px 7px 0 0}
+.legend{font-size:12px;color:var(--muted);margin-top:4px}
+.hide{display:none!important}
+textarea{width:100%;min-height:60px}
+input[type=number]{width:80px}
+.bar{height:10px;background:var(--acc);border-radius:3px}
+.err{color:var(--bad)}
+</style></head><body>
+<header>
+  <h1 id="rname">Robot</h1>
+  <span id="link" class="pill">waiting</span>
+  <span id="drive" class="pill">-</span>
+  <span class="kv">track <select id="trackSel"></select> <button id="newTrackBtn" title="New track: the robot starts learning it from scratch">New track…</button></span>
+  <span class="kv">laps <b id="hLaps">-</b></span>
+  <span class="kv">last lap <b id="hLast">-</b></span>
+  <span class="kv">app <b id="hBle">-</b></span>
+  <span class="kv">up <b id="hUp">-</b></span>
+  <span class="kv small" id="hRec"></span>
+</header>
+<main>
+<div class="col">
+  <section class="card">
+    <h2>Marks <small>exact time in the log, also sent to the robot</small></h2>
+    <div class="row marks">
+      <button id="wrongBtn" class="big" data-code="wrong">⟲ Wrong way</button>
+      <button data-code="tipped">Tipped over</button>
+      <button data-code="stuck">Stuck</button>
+      <button data-code="crash">Crash</button>
+      <button data-code="slower">Getting slower</button>
+      <button data-code="stopped">Stopped</button>
+      <button data-code="normal">Back to normal</button>
+      <button data-code="start">Test start</button>
+    </div>
+    <div class="row" style="margin-top:8px"><input id="markText" placeholder="your own note… (Enter)" style="flex:1;min-width:160px"><button id="markAdd">Add note</button></div>
+    <div class="small muted" id="markInfo" style="margin-top:6px">“Wrong way” pauses the robot's lap and speed-map learning until you press “Right way again”.</div>
+  </section>
+
+  <section class="card">
+    <h2>Track <small id="trackInfo"></small></h2>
+    <div class="row tabs">
+      <button data-view="map" class="on">Map</button>
+      <button data-view="ring">Lap ring</button>
+      <button data-view="edit">Draw / describe your track</button>
+    </div>
+    <div id="viewMap">
+      <div class="row" style="margin:8px 0">
+        <span class="muted small">Shape:</span>
+        <button data-shape="yours">Your track</button><button data-shape="robot">Robot's estimate</button>
+        <span class="muted small" style="margin-left:10px">Colour:</span>
+        <button data-layer="speed" class="on">Speed</button><button data-layer="trouble">Trouble</button><button data-layer="map">Speed map</button>
+      </div>
+      <div class="trackbox"><svg id="trackSvg" viewBox="0 0 1000 700"></svg></div>
+      <div class="legend" id="legend"></div>
+      <div id="matchInfo" class="small" style="margin-top:6px"></div>
+      <div style="margin-top:6px"><span class="muted small">Robot sees:</span> <span id="robotTurns"></span></div>
+      <div><span class="muted small">Your track:</span> <span id="yourTurns"></span></div>
+    </div>
+    <div id="viewRing" class="hide"><div class="trackbox"><svg id="ringSvg" viewBox="0 0 640 600"></svg></div></div>
+    <div id="viewEdit" class="hide">
+      <div class="row" style="margin:8px 0">
+        <button data-emode="draw" class="on">Draw</button><button data-emode="text">Describe</button>
+      </div>
+      <div id="eDraw">
+        <div class="small muted">Click to add corner points in driving order (any start), drag to move, double-click a point to delete it. The line closes by itself and corners are rounded. <b>Hill</b>: press it, then click the first and the last point of the hill.</div>
+        <div class="row" style="margin:6px 0"><button id="eUndo">Undo</button><button id="eClear">Clear</button><button id="eHill">Hill</button><button id="eHillClear">Remove hills</button><span id="eHillMsg" class="small muted"></span></div>
+        <div class="trackbox"><svg id="editSvg" viewBox="0 0 1000 700" style="cursor:crosshair;touch-action:none"></svg></div>
+      </div>
+      <div id="eText" class="hide">
+        <div class="small muted">Pieces in driving order, separated by spaces: <b>S2</b> = straight 2 units, <b>L90</b> / <b>R45</b> = left / right turn in degrees (<b>L90r2</b> = wider, radius 2), <b>H1</b> = hill 1 unit long. Example: <code>S3 L90 S1 H1 L90 S3 L180 R90 L90</code>. All turns together should add up to 360° (left minus right).</div>
+        <textarea id="eDesc" placeholder="S3 L90 S1 L90 S3 L90 S1 L90"></textarea>
+        <div class="trackbox" style="margin-top:6px"><svg id="descSvg" viewBox="0 0 1000 700"></svg></div>
+      </div>
+      <div style="margin-top:6px"><span class="muted small">Turns in your track:</span> <span id="eTurns"></span></div>
+      <div class="row" style="margin-top:8px"><button id="eSave" class="primary">Save track shape</button><span id="eMsg" class="small"></span></div>
+      <h2 style="margin-top:14px">Notes</h2>
+      <textarea id="notes" placeholder="e.g. hill after the 2nd left turn, narrow at the bridge, competition 2026-12-05…"></textarea>
+      <button id="notesSave">Save notes</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Laps <small id="lapSummary"></small></h2>
+    <svg id="lapChart" viewBox="0 0 1000 160"></svg>
+    <div class="scroll"><table id="lapTable"></table></div>
+  </section>
+
+  <section class="card">
+    <h2>Track parts <small>20 parts from the lap mark, averaged over all laps</small></h2>
+    <div class="scroll"><table id="partsTable"></table></div>
+  </section>
+</div>
+
+<div class="col">
+  <section class="card">
+    <h2>Live</h2>
+    <div class="row" style="gap:16px">
+      <span class="kv">speed <b id="lSpd">-</b></span><span class="kv">steer <b id="lStr">-</b></span>
+      <span class="kv">loop <b id="lCyc">-</b></span><span class="kv">I2C err <b id="lI2c">-</b></span>
+      <span class="kv">heap <b id="lHeap">-</b></span><span class="kv">speed map <b id="lSmf">-</b></span>
+    </div>
+    <div class="sens" id="sens" style="margin-top:8px"></div>
+    <div class="senslab"><span>FFL</span><span>FL</span><span>L</span><span>M</span><span>R</span><span>FR</span><span>FFR</span></div>
+  </section>
+
+  <section class="card">
+    <h2>Speed calibration <small>for this track: drives several speeds, scores laps per minute</small></h2>
+    <div class="row">
+      <label>speeds <input id="stSpeeds" value="50,55,60,65,70" style="width:150px"></label>
+      <label>× <input id="stRepeat" type="number" value="2" min="1" max="5"></label>
+      <label>s/run <input id="stDur" type="number" value="40" min="15" max="120"></label>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="stStart" class="primary">Start</button><button id="stPause">Pause after this run</button>
+      <button id="stResume">Continue</button><button id="stStop" class="danger">Stop now</button>
+      <span id="stState" class="small"></span>
+    </div>
+    <div class="small muted" style="margin-top:6px">Robot on the track, main switch OFF, manual OFF, app closed (it would overwrite the speed). Each run: 5 s countdown, drives, stops by itself (also if the Wi-Fi link drops). Pause = waits after the current run (battery swap). Your speed is put back at the end.</div>
+    <table id="stTable" style="margin-top:8px"></table>
+    <div id="stBest" class="row" style="margin-top:6px"></div>
+    <div id="stLog" class="small muted" style="max-height:120px;overflow:auto;margin-top:6px;white-space:pre-wrap"></div>
+    <details style="margin-top:6px"><summary class="small">Earlier results on this track</summary><div id="stPast" class="small"></div></details>
+  </section>
+
+  <section class="card">
+    <h2>Robot log</h2>
+    <div id="log"></div>
+    <div class="row" style="margin-top:6px">
+      <input id="cmd" placeholder="command + Enter (status, sensors, map, track, params, log…)" style="flex:1;min-width:150px">
+      <button data-cmd="status">status</button><button data-cmd="sensors">sensors</button><button data-cmd="map">map</button><button data-cmd="track">track</button><button data-cmd="params">params</button>
+    </div>
+    <label class="small muted"><input type="checkbox" id="quiet" checked> hide routine lines</label>
+  </section>
+
+  <section class="card">
+    <h2>Robot size <small>makes the shape estimate better</small></h2>
+    <div class="row">
+      <label>wheelbase cm <input id="gWb" type="number" step="0.5"></label>
+      <label>turning radius at full lock cm <input id="gTr" type="number" step="1"></label>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <label>length cm <input id="gLen" type="number" step="0.5"></label>
+      <label>width cm <input id="gWid" type="number" step="0.5"></label>
+      <button id="gSave">Save</button>
+    </div>
+    <div class="small muted" style="margin-top:6px">Wheelbase = front axle to rear axle. Turning radius: steer fully to one side, drive a slow circle, measure the circle's diameter (middle of the robot) and halve it.</div>
+    <div id="calibInfo" class="small" style="margin-top:6px"></div>
+  </section>
+</div>
+</main>
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const api = (p, d) => fetch(p, d === undefined ? {} : {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(d)}).then(r => r.json());
+const store = {get(k, d) { try { return localStorage.getItem(k) ?? d } catch (e) { return d } }, set(k, v) { try { localStorage.setItem(k, v) } catch (e) {} }};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+let S = null, A = null, since = 0, aVer = -1, layer = store.get('layer', 'speed'), shapeView = store.get('shape', 'yours');
+const N = 120, PARTS = 20;
+
+// ---------------------------------------------------------------- polling
+async function poll() {
+  try {
+    S = await api('/api/state?since=' + since);
+    renderState();
+    if (S.analysis_ver !== aVer) { const r = await api('/api/track'); aVer = r.ver; A = r.analysis; renderTrack(); }
+    else if (A) drawMap();   // live robot dot
+  } catch (e) { $('#link').className = 'pill bad'; $('#link').textContent = 'dashboard offline'; }
+  setTimeout(poll, 600);
+}
+
+function renderState() {
+  const st = S.status || {};
+  $('#rname').textContent = S.robot_name;
+  const L = $('#link');
+  L.className = 'pill ' + (S.link === 'live' ? 'ok' : S.link === 'lost' ? 'bad' : 'warn');
+  L.textContent = S.link === 'live' ? 'Wi-Fi live' : S.link === 'lost' ? `NO DATA ${S.age}s` : `waiting – join ${S.ssid}`;
+  const D = $('#drive');
+  const ww = st.ww === '1';
+  D.className = 'pill ' + (S.driving ? (ww ? 'bad' : 'ok') : '');
+  D.textContent = S.driving ? (ww ? 'driving – WRONG WAY' : (st.man === '1' ? 'manual' : 'driving')) : (st.sw === '1' ? 'countdown' : 'stopped');
+  const lap = (st.lap || '').split('/');
+  $('#hLaps').textContent = lap[0] || '-'; $('#hLast').textContent = lap[1] && lap[1] !== '0.0s' ? lap[1] : '-';
+  $('#hBle').textContent = st.ble === '1' ? 'connected' : st.ble === '0' ? 'no' : '-';
+  $('#hUp').textContent = st.up || '-';
+  $('#hRec').textContent = S.recording.path ? `rec ${S.recording.path.split('/').pop()} (${S.recording.rows} rows)` : '';
+  // tracks
+  const sel = $('#trackSel'), names = [...new Set([...S.tracks, S.track])].sort();
+  if (sel.dataset.v !== names.join() + '|' + S.track) {
+    sel.innerHTML = names.map(n => `<option ${n === S.track ? 'selected' : ''}>${esc(n)}</option>`).join('');
+    sel.dataset.v = names.join() + '|' + S.track;
+  }
+  // wrong way toggle
+  const wb = $('#wrongBtn');
+  wb.dataset.code = ww ? 'ok' : 'wrong';
+  wb.textContent = ww ? '✓ Right way again' : '⟲ Wrong way';
+  wb.classList.toggle('wrongon', ww);
+  // live
+  const r = S.row;
+  $('#lSpd').textContent = st.spd ? st.spd + ' us' : '-';
+  $('#lStr').textContent = st.str ? (st.str - 1500 > 0 ? 'L ' : 'R ') + Math.abs(st.str - 1500) : '-';
+  $('#lCyc').textContent = st.cyc || '-'; $('#lI2c').textContent = st.i2cErr ?? '-';
+  $('#lHeap').textContent = st.heap ? Math.round(st.heap / 1024) + ' k' : '-';
+  $('#lSmf').textContent = r && r.smf !== undefined && S.driving ? `${(+r.smf).toFixed(2)} (part ${r.part || '?'})` : '-';
+  const dist = st.dist || [];
+  $('#sens').innerHTML = dist.map(d => `<div class="${d < 15 ? 'near' : ''}" style="height:${Math.min(100, d / 1.3)}%" title="${d} cm"></div>`).join('');
+  // log
+  const log = $('#log'), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  const quiet = $('#quiet').checked;
+  for (const [id, t, text] of S.events) {
+    since = Math.max(since, id);
+    if (quiet && /^# robot got|viewer registered|^HB /.test(text)) continue;
+    const cls = /MARK/.test(text) ? 'mark' : /NO DATA|ERROR|BOOT|CRASH|LOST|ABORT/i.test(text) ? 'bad' : /TRAPPED|NOT MOVING|slow loop|FAIL|BLIND|reverse/i.test(text) ? 'warn' : /LAP |connected|lap mark found/.test(text) ? 'ok' : '';
+    const div = document.createElement('div'); div.className = cls; div.textContent = t + ' ' + text; log.appendChild(div);
+  }
+  while (log.childNodes.length > 800) log.removeChild(log.firstChild);
+  if (atBottom) log.scrollTop = log.scrollHeight;
+  renderLaps(); renderSpeedTest(); renderRobot();
+}
+
+// ---------------------------------------------------------------- laps
+function renderLaps() {
+  const laps = S.laps.slice(-40);
+  if (!laps.length) { $('#lapTable').innerHTML = '<tr><td class="muted">No laps yet (the robot counts laps once it knows the lap mark).</td></tr>'; $('#lapChart').innerHTML = ''; return; }
+  const times = laps.map(l => l.s).sort((a, b) => a - b), med = times[Math.floor(times.length / 2)];
+  $('#lapSummary').textContent = `${S.laps.length} laps logged, median ${med.toFixed(2)} s, best ${times[0].toFixed(2)} s`;
+  const maxT = Math.max(...laps.map(l => l.s), med * 1.5), w = 1000 / Math.max(laps.length, 20);
+  $('#lapChart').innerHTML = laps.map((l, i) => {
+    const h = Math.min(150, l.s / maxT * 150), bad = l.rev || l.trap || l.notmov || l.blind;
+    const col = bad ? 'var(--bad)' : l.minwall < 5 ? 'var(--warn)' : 'var(--ok)';
+    return `<rect x="${i * w + 2}" y="${155 - h}" width="${w - 4}" height="${h}" rx="2" fill="${col}"><title>lap ${l.lap}: ${l.s} s</title></rect>`;
+  }).join('') + `<line x1="0" x2="1000" y1="${155 - med / maxT * 150}" y2="${155 - med / maxT * 150}" stroke="var(--muted)" stroke-dasharray="6 6"/>`;
+  $('#lapTable').innerHTML = '<tr><th>lap</th><th>time</th><th>reverse</th><th>trapped</th><th>not moving</th><th>blind</th><th>closest</th><th>full lock</th><th>speed</th></tr>' +
+    laps.slice().reverse().map(l => `<tr><td>${l.lap}</td><td>${l.s.toFixed(2)} s</td><td>${l.rev || ''}</td><td>${l.trap || ''}</td><td>${l.notmov || ''}</td><td>${l.blind || ''}</td><td>${l.minwall} cm</td><td>${l.lock}%</td><td>${l.spd}</td></tr>`).join('');
+}
+
+// ---------------------------------------------------------------- track drawing
+function speedCol(us) { const f = Math.max(0, Math.min(1, (us - 1550) / 300)); return `hsl(${220 - 220 * f},75%,50%)`; }
+function binColour(p, i) {
+  if (layer === 'speed') return speedCol(p.speed[i]);
+  if (layer === 'trouble') { const t = Math.max(p.near[i], p.rev[i]); return t > 0.3 ? 'var(--bad)' : (t > 0.1 || p.lock[i] > 0.6) ? 'var(--warn)' : 'var(--ok)'; }
+  const f = p.smf[i]; return f > 0.97 ? 'var(--ok)' : f > 0.8 ? 'var(--warn)' : 'var(--bad)';
+}
+const LEG = {speed: 'Speed command: blue = slow … red = fast.', trouble: 'Trouble: red = near the wall or reversing in > 30 % of laps, orange = sometimes / mostly full lock, green = fine.', map: 'Learned speed map: green = full speed, orange = slowed to 80–97 %, red = below 80 %.'};
+function fit(xy, W = 1000, H = 700, pad = 60) {
+  const xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
+  const mnx = Math.min(...xs), mny = Math.min(...ys), w = Math.max(...xs) - mnx || 1, h = Math.max(...ys) - mny || 1;
+  const sc = Math.min((W - 2 * pad) / w, (H - 2 * pad) / h), ox = (W - w * sc) / 2, oy = (H - h * sc) / 2;
+  return xy.map(([x, y]) => [ox + (x - mnx) * sc, oy + (y - mny) * sc]);
+}
+function drawMap() {
+  const svg = $('#trackSvg'), p = A && A.profile, dr = A && A.drawing, m = A && A.match;
+  const useYours = shapeView === 'yours' && dr;
+  $$('[data-shape]').forEach(b => { b.classList.toggle('on', b.dataset.shape === (useYours ? 'yours' : 'robot')); b.disabled = b.dataset.shape === 'yours' && !dr; });
+  $$('[data-layer]').forEach(b => b.classList.toggle('on', b.dataset.layer === layer));
+  $('#legend').textContent = LEG[layer];
+  let out = '';
+  const pos = S && S.pos != null ? Math.min(N - 1, Math.floor(S.pos * N)) : null;
+  if (useYours) {
+    const P = fit(dr.xy), M = P.length;
+    for (const [a, b] of dr.hills || []) for (let j = Math.floor(a * M); j < Math.ceil(b * M); j++) { const q = P[j % M], r = P[(j + 1) % M]; out += `<line x1="${q[0]}" y1="${q[1]}" x2="${r[0]}" y2="${r[1]}" stroke="var(--hill)" stroke-width="34" stroke-linecap="round"/>`; }
+    for (let j = 0; j < M; j++) {
+      const q = P[j], r = P[(j + 1) % M], bin = m && p ? m.draw_bin[j] : null;
+      out += `<line x1="${q[0].toFixed(1)}" y1="${q[1].toFixed(1)}" x2="${r[0].toFixed(1)}" y2="${r[1].toFixed(1)}" stroke="${bin != null ? binColour(p, bin) : 'var(--muted)'}" stroke-width="12" stroke-linecap="round"/>`;
+    }
+    if (m && p) {
+      for (let k = 0; k < PARTS; k++) { const q = P[m.bin_to_draw[k * N / PARTS]]; out += `<text x="${q[0] + 12}" y="${q[1] - 12}" fill="var(--muted)" font-size="20">${k + 1}</text>`; }
+      const q0 = P[m.bin_to_draw[0]]; out += `<circle cx="${q0[0]}" cy="${q0[1]}" r="9" fill="var(--fg)"/>`;
+      if (pos != null) { const q = P[m.bin_to_draw[pos]]; out += `<circle cx="${q[0]}" cy="${q[1]}" r="16" fill="none" stroke="var(--acc)" stroke-width="5"/><circle cx="${q[0]}" cy="${q[1]}" r="6" fill="var(--acc)"/>`; }
+      const q1 = P[m.bin_to_draw[3]]; out += arrow(q0, q1);
+    }
+  } else if (p) {
+    const P = fit(p.shape);
+    for (let i = 0; i < N; i++) { const q = P[i], r = P[(i + 1) % N]; out += `<line x1="${q[0].toFixed(1)}" y1="${q[1].toFixed(1)}" x2="${r[0].toFixed(1)}" y2="${r[1].toFixed(1)}" stroke="${binColour(p, i)}" stroke-width="12" stroke-linecap="round"/>`; }
+    for (let k = 0; k < PARTS; k++) { const q = P[k * N / PARTS]; out += `<text x="${q[0] + 12}" y="${q[1] - 12}" fill="var(--muted)" font-size="20">${k + 1}</text>`; }
+    out += `<circle cx="${P[0][0]}" cy="${P[0][1]}" r="9" fill="var(--fg)"/>` + arrow(P[0], P[3]);
+    if (pos != null) { const q = P[pos]; out += `<circle cx="${q[0]}" cy="${q[1]}" r="16" fill="none" stroke="var(--acc)" stroke-width="5"/><circle cx="${q[0]}" cy="${q[1]}" r="6" fill="var(--acc)"/>`; }
+  } else {
+    out = `<text x="500" y="340" text-anchor="middle" fill="var(--muted)" font-size="24">No laps on this track yet – drive a few laps</text><text x="500" y="375" text-anchor="middle" fill="var(--muted)" font-size="18">(or draw your track in the third tab)</text>`;
+  }
+  svg.innerHTML = out;
+}
+function arrow(a, b) {
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]), x = a[0] + Math.cos(ang) * 34, y = a[1] + Math.sin(ang) * 34;
+  const p1 = [x - Math.cos(ang - 0.5) * 16, y - Math.sin(ang - 0.5) * 16], p2 = [x - Math.cos(ang + 0.5) * 16, y - Math.sin(ang + 0.5) * 16];
+  return `<polygon points="${x},${y} ${p1} ${p2}" fill="var(--fg)"/>`;
+}
+const turnChips = (ts, cal) => ts && ts.length ? ts.map(t => `<span class="chip ${t.dir}">${t.dir === 'L' ? '↰ left' : '↱ right'} ${cal === false ? '' : t.deg + '°'}</span>`).join('') : '<span class="muted small">–</span>';
+
+function renderTrack() {
+  if (!A) return;
+  const p = A.profile, m = A.match;
+  $('#trackInfo').textContent = p ? `${p.laps} laps from ${p.runs} drive(s), lap ≈ ${p.lap_s.toFixed(2)} s` : 'no laps recorded on this track yet';
+  drawMap();
+  $('#robotTurns').innerHTML = p ? turnChips(p.turns, p.calibrated) + (p.calibrated ? '' : ' <span class="muted small">(directions only – draw your track once to calibrate degrees)</span>') : '–';
+  $('#yourTurns').innerHTML = A.drawing ? turnChips(A.drawing.turns) : '<span class="muted small">not drawn yet</span>';
+  let mi = '';
+  if (m) {
+    const q = Math.round(m.quality * 100);
+    mi = `<b>Match ${q}%</b> ${q >= 75 ? '– good' : q >= 55 ? '– so-so (check the drawing)' : '– poor: the drawing and the robot disagree'}; the robot drives your drawing ${m.reverse ? 'in the opposite direction to how you drew it' : 'in the direction you drew it'}. Dot = lap mark, arrow = driving direction, ring = robot now.`;
+  } else if (A.drawing && !p) mi = 'Drawing saved – it gets matched once the robot has driven a few laps on this track.';
+  $('#matchInfo').innerHTML = mi;
+  // parts table
+  $('#partsTable').innerHTML = p ? '<tr><th>part</th><th>turn</th><th>speed</th><th>near wall</th><th>full lock</th><th>reverse</th><th>map</th><th>width</th><th>hill</th></tr>' +
+    p.parts.map(r => `<tr><td>${r.part}</td><td>${r.turn}</td><td>${r.speed}</td><td>${r.near ? r.near + '%' : ''}</td><td>${r.lock ? r.lock + '%' : ''}</td><td>${r.rev ? r.rev + '%' : ''}</td><td>${r.smf < 0.995 ? r.smf.toFixed(2) : ''}</td><td>${r.width} cm</td><td>${r.hill ? '⛰' : ''}</td></tr>`).join('') : '';
+  drawRing();
+  // editor + notes (only when not being edited)
+  if (!edit.dirty) loadEditor();
+  if (document.activeElement !== $('#notes')) $('#notes').value = A.notes || '';
+  // speed test history
+  const past = (A.speedtests || []).slice().reverse();
+  $('#stPast').innerHTML = past.length ? past.map(t => `<div>${esc(t.when)} ${esc(t.robot)}: ${t.results.map(r => `${r.speed}→${r.laps_per_min ?? '–'}`).join(', ')} laps/min${t.best ? ` – <b>best ${t.best}</b>` : ''}${t.aborted ? ' (aborted)' : ''}</div>`).join('') : 'none yet';
+}
+
+function drawRing() {
+  const p = A && A.profile, svg = $('#ringSvg');
+  if (!p) { svg.innerHTML = '<text x="320" y="300" text-anchor="middle" fill="var(--muted)" font-size="20">no laps yet</text>'; return; }
+  const R = 230, CX = 320, CY = 300; let out = '';
+  for (let k = 0; k < PARTS; k++) {
+    const a0 = -Math.PI / 2 + 2 * Math.PI * k / PARTS + 0.012, a1 = -Math.PI / 2 + 2 * Math.PI * (k + 1) / PARTS - 0.012, bin = k * N / PARTS + 3;
+    out += `<path d="M${CX + R * Math.cos(a0)},${CY + R * Math.sin(a0)} A${R},${R} 0 0 1 ${CX + R * Math.cos(a1)},${CY + R * Math.sin(a1)}" stroke="${binColour(p, bin)}" stroke-width="28" fill="none"/>`;
+    const am = (a0 + a1) / 2, pr = p.parts[k], t = pr.turn;
+    const g = t === 'straight' ? '|' : t.startsWith('left') ? '↰' : '↱';
+    out += `<text x="${CX + (R - 44) * Math.cos(am)}" y="${CY + (R - 44) * Math.sin(am) + 7}" text-anchor="middle" font-size="${t === 'straight' ? 16 : 22}" fill="var(--fg)">${g}</text>`;
+    out += `<text x="${CX + (R + 28) * Math.cos(am)}" y="${CY + (R + 28) * Math.sin(am) + 5}" text-anchor="middle" font-size="13" fill="var(--muted)">${k + 1}${pr.hill ? '⛰' : ''}</text>`;
+  }
+  if (S && S.pos != null) { const a = -Math.PI / 2 + 2 * Math.PI * Math.min(S.pos, 0.999); out += `<circle cx="${CX + R * Math.cos(a)}" cy="${CY + R * Math.sin(a)}" r="18" fill="none" stroke="var(--acc)" stroke-width="5"/>`; }
+  out += `<circle cx="${CX}" cy="${CY - R}" r="8" fill="var(--fg)"/><text x="${CX}" y="${CY}" text-anchor="middle" font-size="22" font-weight="600" fill="var(--fg)">${p.laps} laps</text><text x="${CX}" y="${CY + 24}" text-anchor="middle" font-size="14" fill="var(--muted)">lap ≈ ${p.lap_s.toFixed(2)} s · dot = lap mark</text>`;
+  svg.innerHTML = out;
+}
+
+// ---------------------------------------------------------------- editor
+const edit = {mode: 'draw', pts: [], hills: [], hillPick: null, drag: null, dirty: false, text: ''};
+function loadEditor() {
+  const lay = A && A.layout;
+  edit.pts = lay && lay.points ? lay.points.map(p => [...p]) : [];
+  edit.hills = lay && lay.hill_pts ? lay.hill_pts.map(h => [...h]) : [];
+  edit.text = lay && lay.text || '';
+  edit.mode = lay && lay.text ? 'text' : 'draw';
+  $('#eDesc').value = edit.text;
+  setEMode(edit.mode, true); drawEditor(); preview();
+}
+function setEMode(m, quiet) {
+  edit.mode = m; $$('[data-emode]').forEach(b => b.classList.toggle('on', b.dataset.emode === m));
+  $('#eDraw').classList.toggle('hide', m !== 'draw'); $('#eText').classList.toggle('hide', m !== 'text');
+  if (!quiet) preview();
+}
+function layoutNow() { return edit.mode === 'text' ? {text: $('#eDesc').value} : {points: edit.pts, hill_pts: edit.hills}; }
+function drawEditor() {
+  let out = '';
+  for (let x = 0; x <= 1000; x += 50) out += `<line x1="${x}" y1="0" x2="${x}" y2="700" stroke="var(--line)" stroke-width="${x % 250 ? .5 : 1}"/>`;
+  for (let y = 0; y <= 700; y += 50) out += `<line x1="0" y1="${y}" x2="1000" y2="${y}" stroke="var(--line)" stroke-width="${y % 250 ? .5 : 1}"/>`;
+  const P = edit.pts, n = P.length;
+  for (const [a, b] of edit.hills) { let i = a; for (let s = 0; s < n && i !== b; s++) { const j = (i + 1) % n; out += `<line x1="${P[i][0]}" y1="${P[i][1]}" x2="${P[j][0]}" y2="${P[j][1]}" stroke="var(--hill)" stroke-width="30" stroke-linecap="round"/>`; i = j; } }
+  if (n > 1) out += `<polygon points="${P.map(p => p.join(',')).join(' ')}" fill="none" stroke="var(--fg)" stroke-width="4" stroke-linejoin="round"/>`;
+  if (n > 1) out += arrow(P[0], P[1]);
+  P.forEach((p, i) => out += `<circle cx="${p[0]}" cy="${p[1]}" r="${i === edit.hillPick ? 14 : 10}" fill="${i === 0 ? 'var(--acc)' : 'var(--card)'}" stroke="var(--fg)" stroke-width="2" data-i="${i}" style="cursor:move"/>`);
+  if (!n) out += '<text x="500" y="350" text-anchor="middle" fill="var(--muted)" font-size="22">click to place the first corner</text>';
+  $('#editSvg').innerHTML = out;
+}
+function svgPt(svg, ev) { const r = svg.getBoundingClientRect(); return [Math.round((ev.clientX - r.left) / r.width * 1000), Math.round((ev.clientY - r.top) / r.height * 700)]; }
+let prevT = null;
+function preview() {
+  clearTimeout(prevT);
+  prevT = setTimeout(async () => {
+    const r = await api('/api/layout/preview', {layout: layoutNow()});
+    $('#eTurns').innerHTML = r.ok ? turnChips(r.turns) + ` <span class="muted small">total ${r.turns.reduce((s, t) => s + (t.dir === 'L' ? t.deg : -t.deg), 0)}°</span>` : '<span class="muted small">–</span>';
+    if (edit.mode === 'text') {
+      let out = '';
+      if (r.ok) { const P = fit(r.xy); for (const [a, b] of r.hills) for (let j = Math.floor(a * P.length); j < Math.ceil(b * P.length); j++) { const q = P[j % P.length], s = P[(j + 1) % P.length]; out += `<line x1="${q[0]}" y1="${q[1]}" x2="${s[0]}" y2="${s[1]}" stroke="var(--hill)" stroke-width="30" stroke-linecap="round"/>`; }
+        out += `<polygon points="${P.map(p => p.join(',')).join(' ')}" fill="none" stroke="var(--fg)" stroke-width="5"/>` + arrow(P[0], P[2]); }
+      $('#descSvg').innerHTML = out;
+    }
+  }, 250);
+}
+const ed = $('#editSvg');
+ed.addEventListener('pointerdown', ev => {
+  const t = ev.target.closest('circle');
+  if (t) {
+    const i = +t.dataset.i;
+    if (edit.hillPick !== null) { if (i !== edit.hillPick) edit.hills.push([edit.hillPick, i]); edit.hillPick = null; $('#eHillMsg').textContent = ''; changed(); return; }
+    if ($('#eHill').classList.contains('on')) { edit.hillPick = i; $('#eHill').classList.remove('on'); $('#eHillMsg').textContent = 'now click the last point of the hill'; drawEditor(); return; }
+    edit.drag = i; ed.setPointerCapture(ev.pointerId); return;
+  }
+  edit.pts.push(svgPt(ed, ev)); changed();
+});
+ed.addEventListener('pointermove', ev => { if (edit.drag !== null) { edit.pts[edit.drag] = svgPt(ed, ev); drawEditor(); } });
+ed.addEventListener('pointerup', () => { if (edit.drag !== null) { edit.drag = null; changed(); } });
+ed.addEventListener('dblclick', ev => { const t = ev.target.closest('circle'); if (!t) return; const i = +t.dataset.i; edit.pts.splice(i, 1); edit.hills = edit.hills.filter(h => h[0] !== i && h[1] !== i).map(h => h.map(x => x > i ? x - 1 : x)); changed(); });
+function changed() { edit.dirty = true; drawEditor(); preview(); $('#eMsg').textContent = 'not saved'; }
+$('#eUndo').onclick = () => { edit.pts.pop(); edit.hills = edit.hills.filter(h => h[0] < edit.pts.length && h[1] < edit.pts.length); changed(); };
+$('#eClear').onclick = () => { if (confirm('Clear the drawing?')) { edit.pts = []; edit.hills = []; changed(); } };
+$('#eHill').onclick = () => { $('#eHill').classList.toggle('on'); edit.hillPick = null; $('#eHillMsg').textContent = $('#eHill').classList.contains('on') ? 'click the first point of the hill' : ''; };
+$('#eHillClear').onclick = () => { edit.hills = []; changed(); };
+$('#eDesc').addEventListener('input', () => { edit.dirty = true; $('#eMsg').textContent = 'not saved'; preview(); });
+$$('[data-emode]').forEach(b => b.onclick = () => setEMode(b.dataset.emode));
+$('#eSave').onclick = async () => {
+  const lay = layoutNow();
+  if (edit.mode === 'draw' && edit.pts.length < 3) { $('#eMsg').textContent = 'at least 3 points'; return; }
+  const r = await api('/api/track/save', {layout: lay});
+  edit.dirty = false; $('#eMsg').textContent = r.ok ? 'saved – matching with the robot data…' : (r.error || 'failed');
+  shapeView = 'yours'; store.set('shape', 'yours');
+};
+$('#notesSave').onclick = () => api('/api/track/save', {notes: $('#notes').value});
+
+// ---------------------------------------------------------------- speed test
+function renderSpeedTest() {
+  const t = S.speedtest, busy = ['running', 'paused', 'stopping'].includes(t.state);
+  $('#stStart').disabled = busy; $('#stPause').disabled = !busy || t.pause_req; $('#stResume').disabled = !(t.state === 'paused' || t.pause_req); $('#stStop').disabled = !busy;
+  $('#stState').innerHTML = t.state === 'idle' ? '' : `<b>${t.state}</b>${busy ? ` – run ${t.run}/${t.total}` : ''}`;
+  const rs = t.results || [], mx = Math.max(1, ...rs.map(r => r.laps_per_min || 0));
+  $('#stTable').innerHTML = rs.length ? '<tr><th>speed</th><th>runs</th><th>laps/min</th><th></th><th>lap s</th><th>reverses</th><th>near wall</th></tr>' + rs.map(r =>
+    `<tr${r.speed === t.best ? ' style="font-weight:700"' : ''}><td>${r.speed}</td><td>${r.runs}</td><td>${r.laps_per_min ?? '–'}</td><td style="width:30%"><div class="bar" style="width:${(r.laps_per_min || 0) / mx * 100}%"></div></td><td>${r.lap_s ?? '–'}</td><td>${r.reverses ?? '–'}</td><td>${r.near_pct != null ? r.near_pct + '%' : '–'}</td></tr>`).join('') : '';
+  const best = t.best || (A && A.best_speed && A.best_speed[S.robot]);
+  $('#stBest').innerHTML = best && !busy ? `<span>Best for this track: <b>${best}</b></span> <button id="stApply" class="primary">Apply ${best} to the robot</button> <span id="stApplyMsg" class="small"></span>` : '';
+  if ($('#stApply')) $('#stApply').onclick = async () => { const r = await api('/api/speed/apply', {speed: best}); $('#stApplyMsg').textContent = r.error || (r.ok ? 'done. ' + r.note : 'failed: ' + r.reply); };
+  $('#stLog').textContent = (t.log || []).join('\n');
+}
+$('#stStart').onclick = async () => {
+  if (!confirm('Start the speed calibration? The robot will drive by itself.')) return;
+  const r = await api('/api/speedtest/start', {speeds: $('#stSpeeds').value, repeat: +$('#stRepeat').value, duration: +$('#stDur').value});
+  if (r.error) alert(r.error);
+};
+$('#stPause').onclick = () => api('/api/speedtest/pause', {});
+$('#stResume').onclick = () => api('/api/speedtest/resume', {});
+$('#stStop').onclick = () => api('/api/speedtest/stop', {});
+
+// ---------------------------------------------------------------- robot size
+let geomLoaded = false;
+function renderRobot() {
+  const g = S.geometry || {};
+  if (!geomLoaded) { $('#gWb').value = g.wheelbase_cm ?? ''; $('#gTr').value = g.turn_radius_cm ?? ''; $('#gLen').value = g.length_cm ?? ''; $('#gWid').value = g.width_cm ?? ''; geomLoaded = true; }
+  const c = S.calib;
+  $('#calibInfo').innerHTML = c ? `Steering calibrated on track <b>${esc(c.track)}</b> (${esc(c.when)}, match ${Math.round(c.quality * 100)}%): offset ${c.offset.toFixed(3)}. Used for the shape estimate on every track.` : 'Steering not calibrated yet: draw the track you drive on once (and drive a few laps) – the robot then learns how its steering turns into real turns, and its guesses on new tracks get better.';
+}
+$('#gSave').onclick = () => api('/api/robot/geometry', {wheelbase_cm: $('#gWb').value, turn_radius_cm: $('#gTr').value, length_cm: $('#gLen').value, width_cm: $('#gWid').value});
+
+// ---------------------------------------------------------------- misc wiring
+$$('.marks button').forEach(b => b.onclick = () => api('/api/mark', {code: b.dataset.code}));
+const addNote = () => { const t = $('#markText').value.trim(); if (t) { api('/api/mark', {text: t}); $('#markText').value = ''; } };
+$('#markAdd').onclick = addNote; $('#markText').addEventListener('keydown', e => { if (e.key === 'Enter') addNote(); });
+$('#cmd').addEventListener('keydown', e => { if (e.key === 'Enter' && $('#cmd').value.trim()) { api('/api/cmd', {cmd: $('#cmd').value}); $('#cmd').value = ''; } });
+$$('[data-cmd]').forEach(b => b.onclick = () => api('/api/cmd', {cmd: b.dataset.cmd}));
+$$('[data-layer]').forEach(b => b.onclick = () => { layer = b.dataset.layer; store.set('layer', layer); drawMap(); drawRing(); });
+$$('[data-shape]').forEach(b => b.onclick = () => { shapeView = b.dataset.shape; store.set('shape', shapeView); drawMap(); });
+$$('[data-view]').forEach(b => b.onclick = () => {
+  $$('[data-view]').forEach(x => x.classList.toggle('on', x === b));
+  $('#viewMap').classList.toggle('hide', b.dataset.view !== 'map'); $('#viewRing').classList.toggle('hide', b.dataset.view !== 'ring'); $('#viewEdit').classList.toggle('hide', b.dataset.view !== 'edit');
+  if (b.dataset.view === 'edit') { drawEditor(); preview(); }
+});
+$('#trackSel').onchange = async e => {
+  const name = e.target.value;
+  const r = await api('/api/track/select', {name});
+  if (r.error) { alert(r.error); e.target.dataset.v = ''; } else { edit.dirty = false; aVer = -1; }
+};
+$('#newTrackBtn').onclick = async () => {
+  const name = (prompt('Name of the new track (letters, digits, - or _, max 15):') || '').trim();
+  if (!name) return;
+  if (!/^[A-Za-z0-9_-]{1,15}$/.test(name)) { alert('letters, digits, - or _, max 15 characters'); return; }
+  const r = await api('/api/track/select', {name});
+  if (r.error) alert(r.error); else { edit.dirty = false; aVer = -1; alert(`Track “${name}”: ${r.robot}`); }
+};
+poll();
+</script></body></html>

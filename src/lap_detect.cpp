@@ -16,7 +16,14 @@ static bool wasDriving = false;
 static float recent[5];       // last lap times for the median
 static int recentN = 0;
 static bool lastConsistent = false;
-void speedmap_lap_done(bool consistent);   // speed_map.cpp
+static bool synced = true;    // false = saved fingerprint loaded, lap mark not found yet
+static bool wrongWay = false; // set by you ("mark wrong"): nothing is learned meanwhile
+static bool tmplProven = false; // fingerprint found again / gave 3 laps: worth searching for
+static int tmplLaps = 0;
+void speedmap_lap_done(bool consistent);                // speed_map.cpp
+bool speedmap_saved_template(float *out);               // fingerprint of this track
+void speedmap_template_learned(const float *t);
+const char *speedmap_track_name();
 
 static float medianRecent() {
   float t[5];
@@ -77,16 +84,20 @@ static void learnTemplate(uint32_t now) {
   if (!normalizedWindow(w)) return;
   memcpy(tmpl, w, sizeof(tmpl));
   haveTemplate = true;
+  synced = true;
+  tmplProven = false;
+  tmplLaps = 0;
   lastLapMs = now;
   resetStats();  // lap statistics count from the fingerprint point
   prevC = prevPrevC = 0;
   logEvent("lap fingerprint learned (laps so far %d)", laps);
+  speedmap_template_learned(tmpl);  // saved with the track: same lap mark next drive
 }
 
 void lap_update(const LapSample &s) {
   bool driving = s.driving;
   float leftCm = s.leftCm, rightCm = s.rightCm;
-  bool disturbed = s.disturbed;
+  bool disturbed = s.disturbed || wrongWay;
   uint32_t now = millis();
   if (driving) {  // statistics every loop
     st.loops++;
@@ -109,7 +120,16 @@ void lap_update(const LapSample &s) {
     driveStartMs = now;
     lastSampleMs = now - LAP_SAMPLE_MS;
     bufPos = bufCount = 0;
-    haveTemplate = false;
+    wrongWay = false;
+    // Fingerprint saved with this track: look for the SAME lap mark as last time,
+    // so the speed map (parts counted from the lap mark) lines up again. Not found
+    // within LAP_RELEARN_MS -> a new fingerprint is learned (and the map resets).
+    haveTemplate = speedmap_saved_template(tmpl);
+    synced = !haveTemplate;
+    tmplProven = false;
+    tmplLaps = 0;
+    lastLapMs = now;
+    if (haveTemplate) logEvent("looking for the saved lap mark of track '%s'", speedmap_track_name());
     laps = 0;
     lastLapS = 0;
     prevC = prevPrevC = 0;
@@ -126,7 +146,14 @@ void lap_update(const LapSample &s) {
   if (bufCount < LAP_WINDOW) { bufCount++; return; }
 
   // (re)learn the fingerprint: after the start, and when no lap for a long time
-  if (!haveTemplate || now - lastLapMs > LAP_RELEARN_MS) {
+  // No lap for a while with a fingerprint that is known to work (pushed, turned
+  // around, stuck): keep searching for the same lap mark before learning a new one,
+  // because a new one moves the lap mark and the speed map has to start over.
+  if (haveTemplate && synced && tmplProven && now - lastLapMs > LAP_RELEARN_MS) {
+    synced = false;
+    logEvent("lap mark lost (no lap for %lu s), looking for it", (unsigned long)((now - lastLapMs) / 1000));
+  }
+  if (!haveTemplate || now - lastLapMs > (tmplProven ? LAP_RELEARN_PROVEN_MS : LAP_RELEARN_MS)) {
     if (now - driveStartMs >= LAP_SETTLE_MS) {
       bool had = haveTemplate;
       haveTemplate = false;
@@ -142,10 +169,17 @@ void lap_update(const LapSample &s) {
     for (int i = 0; i < LAP_WINDOW; i++) c += w[i] * tmpl[i];
   }
   // peak of the match one sample ago -> lap at that moment
-  if (prevC > LAP_THRESHOLD && prevC >= c && prevC > prevPrevC && prevSampleMs - lastLapMs >= LAP_MIN_MS) {
+  if (!synced && prevC > LAP_THRESHOLD && prevC >= c && prevC > prevPrevC) {
+    synced = true;  // (saved / lost) lap mark found: laps count from here
+    tmplProven = true;
+    lastLapMs = prevSampleMs;
+    resetStats();
+    logEvent("lap mark found (match %.2f)", prevC);
+  } else if (synced && prevC > LAP_THRESHOLD && prevC >= c && prevC > prevPrevC && prevSampleMs - lastLapMs >= LAP_MIN_MS) {
     lastLapS = (prevSampleMs - lastLapMs) / 1000.0f;
     lastLapMs = prevSampleMs;
     laps++;
+    if (++tmplLaps >= 3) tmplProven = true;
     float med = medianRecent();
     lastConsistent = recentN >= LAP_POS_MIN_LAPS - 1 && med > 0 &&
                      fabsf(lastLapS - med) <= LAP_POS_TOLERANCE * med;
@@ -165,7 +199,7 @@ int lap_count() { return laps; }
 float lap_last_s() { return lastLapS; }
 
 bool lap_position(float *phase) {
-  if (!wasDriving || !haveTemplate || laps < LAP_POS_MIN_LAPS || !lastConsistent) return false;
+  if (!wasDriving || !haveTemplate || !synced || wrongWay || laps < LAP_POS_MIN_LAPS || !lastConsistent) return false;
   float med = medianRecent();
   if (med <= 0) return false;
   float p = (millis() - lastLapMs) / (med * 1000.0f);
@@ -177,3 +211,18 @@ bool lap_position(float *phase) {
 bool lap_last_consistent() { return lastConsistent; }
 
 float lap_median_s() { return recentN >= LAP_POS_MIN_LAPS ? medianRecent() : 0; }
+
+bool lap_wrong_way() { return wrongWay; }
+
+// "mark <text>": your note in the robot's log (from the laptop dashboard buttons).
+// "mark wrong..." = driving the wrong way: no lap learning / speed map learning
+// until "mark ok" (or "mark right...") or the next start.
+bool lap_command(const char *cmd, Print &out) {
+  if (strncmp(cmd, "mark", 4) != 0 || (cmd[4] != 0 && cmd[4] != ' ')) return false;
+  const char *text = cmd[4] ? cmd + 5 : "";
+  if (strncmp(text, "wrong", 5) == 0) wrongWay = true;
+  else if (strncmp(text, "ok", 2) == 0 || strncmp(text, "right", 5) == 0) wrongWay = false;
+  logEvent("MARK %s%s", text[0] ? text : "-", wrongWay ? " (wrong way: not learning)" : "");
+  out.printf("marked: %s\n", text);
+  return true;
+}

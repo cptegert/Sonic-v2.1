@@ -1,18 +1,27 @@
 #!/usr/bin/env bash
 # One command to log a robot live:
-#   tools/log.sh shadow        (or sonic / knuckles; optional 2nd arg: minutes, default 60)
-# Joins the robot's Wi-Fi (and rejoins after robot restarts), shows the live viewer
-# (status, events, commands) and records everything to crashlogs/ (wifi_*.txt,
-# run_*.csv, watch_*.txt). Marks: type !3 (slower), !4 (stuck), !5 (stopped) or
-# !<text> + Enter. Quit with q or Ctrl+C - the laptop goes back to its Wi-Fi.
+#   tools/log.sh shadow          (or sonic / knuckles)  -> dashboard in the browser
+#   tools/log.sh shadow term     -> old terminal viewer (wifi_log.py) + track page
+# Joins the robot's Wi-Fi (and rejoins after robot restarts) and records everything
+# to crashlogs/ (wifi_*.txt, run_*.csv, watch_*.txt).
+# Dashboard (http://localhost:8770): live status, marks (wrong way / stuck / ...),
+# laps, the track (draw your own, the robot's data is placed on it), named tracks,
+# speed calibration. Quit with Ctrl+C - the laptop goes back to its Wi-Fi.
 cd "$(dirname "$0")/.." || exit 1
 ROBOT="${1:-shadow}"
-MIN="${2:-60}"
+MODE="${2:-dashboard}"
 PY="$HOME/.platformio/penv/bin/python"
-"$PY" tools/watch_robot.py --robot "$ROBOT" --minutes "$MIN" --no-recorder > /dev/null 2>&1 &
+"$PY" tools/watch_robot.py --robot "$ROBOT" --minutes 180 --no-recorder > /dev/null 2>&1 &
 WATCH=$!
 trap 'kill -INT $WATCH 2>/dev/null; wait $WATCH 2>/dev/null' EXIT
+echo "joining the robot's Wi-Fi ..."
 sleep 6   # let it join the robot's Wi-Fi
+
+if [ "$MODE" != "term" ]; then
+  "$PY" tools/dashboard.py --robot "$ROBOT"
+  exit 0
+fi
+
 START=$(date +%s)
 # live track view: rebuilt every 10 s from the drive being recorded, page reloads itself
 LIVE=crashlogs/track_live.html

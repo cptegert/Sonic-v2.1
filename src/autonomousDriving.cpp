@@ -73,6 +73,12 @@ void autonomous_mode() {
   // ===================================================================================
   static int stillRef[7];
   static uint32_t stillSince = 0;
+  static uint32_t stillLastCallMs = 0;
+  // Not called for a while = the robot was stopped: start over, or the time spent
+  // standing before the start counts as "not moving" (2026-11-22: reversed right
+  // at the start with "NOT MOVING 68383 ms")
+  if (millis() - stillLastCallMs > 500) stillSince = 0;
+  stillLastCallMs = millis();
   if (!reversing) {
     bool fullLock = fabsf(steer_output - SERVO_CENTER_US) >= MAX_STEER - 10;
     bool minSpeed = final_speed <= 1500 + min_speed * 5 + 5;

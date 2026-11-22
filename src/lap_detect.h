@@ -8,6 +8,8 @@
 // Tuned 2026-11-22 on all recorded drives: ~2 % false laps, laps > 9 s are mostly
 // real slow laps (stuck / pushed) or a missed match. For logging, not for
 // "stop after N laps".
+// The fingerprint is saved with the track (speed_map.cpp): the next drive first looks
+// for the same lap mark, so lap parts (and the speed map) stay in the same places.
 // -----------------------------------------------------------------------------
 #ifndef LAP_DETECT_H
 #define LAP_DETECT_H
@@ -20,6 +22,7 @@
 #define LAP_THRESHOLD    0.70f
 #define LAP_MIN_MS       2500
 #define LAP_RELEARN_MS   20000
+#define LAP_RELEARN_PROVEN_MS 60000  // proven fingerprint: search this long before replacing it
 #define LAP_MIN_STD_CM   4.0f    // fingerprint must have some shape
 
 // Everything the lap module looks at, once per loop
@@ -50,5 +53,7 @@ float lap_last_s();     // last lap time in s, 0 = none yet
 bool lap_position(float *phase);   // 0..1 = fraction of a typical lap since the lap mark
 bool lap_last_consistent();        // was the lap that just ended a regular one?
 float lap_median_s();              // median of the recent laps (0 = not enough laps)
+bool lap_wrong_way();              // you marked "wrong way" (dashboard button)
+bool lap_command(const char *cmd, Print &out);   // mark <text>
 
 #endif

@@ -455,7 +455,7 @@ void loop() {
 // ============================================================================
 static const char *TELEMETRY_HEADER =
   "t_ms,loop,cyc_ms,manual,rev,trapped,FFL,FL,L,M,R,FR,FFR,left,mid,right,"
-  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap,part,smf";
+  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap,part,smf,ww";
 
 void sendTelemetry(bool driving, float cycleTimeMs) {
   static bool wasDriving = false;
@@ -478,7 +478,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
   const PidTelemetry &t = pidTel;
   snprintf(line, sizeof(line),
            "T,%lu,%lu,%.1f,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,"
-           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d,%d,%.2f",
+           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d,%d,%.2f,%d",
            (unsigned long)now, (unsigned long)loopNo++, cycleTimeMs, manual_mode_switch,
            t.reversing, t.trapped,
            distancesAll[0], distancesAll[1], distancesAll[2], distancesAll[3],
@@ -487,7 +487,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
            t.bias, t.error, t.pTerm, t.iTerm, t.dTerm, t.pid,
            manual_mode_switch ? steer_output : t.steerUs,
            manual_mode_switch ? final_speed : t.speedUs,
-           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count(), speedmap_part() + 1, speedmap_factor());
+           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count(), speedmap_part() + 1, speedmap_factor(), lap_wrong_way());
   wifiLog_send(line);
 } 
 
@@ -577,6 +577,13 @@ bool remoteCommand(const char *cmd, bool driving, Print &out) {
     return true;
   }
   if (strcmp(cmd, "params") == 0) {
+    printParams(out);
+    return true;
+  }
+  if (strcmp(cmd, "save") == 0) {  // = Save button in the app (keeps values over power-off)
+    if (RemoteXY.Start_switch) { out.println("Not while main switch is ON"); return true; }
+    saveAllSettings();
+    logEvent("remote: settings saved");
     printParams(out);
     return true;
   }
