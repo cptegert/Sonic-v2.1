@@ -8,6 +8,7 @@
 #include "wifi_log.h"
 #include "distance_sensors.h"  // printSensorDiagnostics
 #include "robot_config.h"      // ROBOT_NAME
+#include "lap_detect.h"        // lap count in the status line
 
 // ============================================================================
 // SETTINGS
@@ -151,12 +152,13 @@ static void formatSnapshot(char *buf, size_t len, const BlackBox &b) {
   const LogSnapshot &s = b.snap;
   snprintf(buf, len,
            "up=%.1fs loops=%lu stage=%s cyc=%ums max=%ums sw=%u drive=%u man=%u ble=%u rev=%u "
-           "spd=%d str=%d dist=[%d %d %d %d %d %d %d] heap=%lu heapMin=%lu i2cErr=%lu sta=%d viewer=%lus",
+           "spd=%d str=%d dist=[%d %d %d %d %d %d %d] heap=%lu heapMin=%lu i2cErr=%lu sta=%d viewer=%lus lap=%d/%.1fs",
            b.uptimeMs / 1000.0, (unsigned long)b.loops, stageName(b.stage), s.cycleMs, b.maxCycleMs,
            s.startSwitch, s.driving, s.manual, s.connected, s.reversing, s.speedUs, s.steerUs,
            s.dist[0], s.dist[1], s.dist[2], s.dist[3], s.dist[4], s.dist[5], s.dist[6],
            (unsigned long)b.freeHeap, (unsigned long)b.minFreeHeap, (unsigned long)b.i2cErrors,
-           wifiLog_stations(), (unsigned long)min(wifiLog_msSinceViewer() / 1000, (uint32_t)9999));
+           wifiLog_stations(), (unsigned long)min(wifiLog_msSinceViewer() / 1000, (uint32_t)9999),
+           lap_count(), lap_last_s());
 }
 
 static void logCoreDumpSummary() {

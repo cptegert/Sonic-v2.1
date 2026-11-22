@@ -14,6 +14,7 @@
 #include <driver/gpio.h>  // pintest
 #include <esp_task_wdt.h>
 #include "robot_config.h"  // robot identity (name, Bluetooth, GUI, motor scale)
+#include "lap_detect.h"    // lap times from sensor data
 extern bool reversing;  // autonomousDriving.cpp, for the logger
 void sendTelemetry(bool driving, float cycleTimeMs);
 bool remoteCommand(const char *cmd, bool driving, Print &out);
@@ -422,6 +423,8 @@ void loop() {
   snap.driving = driving;
   snap.connected = RemoteXY.connect_flag;
   snap.reversing = reversing;
+  lap_update(driving, distances[0], distances[2],
+             reversing || pidTel.trapped || manual_mode_switch == 1);
   logger_loop(snap);
   switchAfterLastLoop = RemoteXY.Start_switch;
   sendTelemetry(driving, cycleTimeMs);
@@ -435,7 +438,7 @@ void loop() {
 // ============================================================================
 static const char *TELEMETRY_HEADER =
   "t_ms,loop,cyc_ms,manual,rev,trapped,FFL,FL,L,M,R,FR,FFR,left,mid,right,"
-  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble";
+  "bias,error,p,i,d,pid,steer_us,speed_us,steer_mult,brake,kp,ki,kd,speed_limit,ble,lap";
 
 void sendTelemetry(bool driving, float cycleTimeMs) {
   static bool wasDriving = false;
@@ -458,7 +461,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
   const PidTelemetry &t = pidTel;
   snprintf(line, sizeof(line),
            "T,%lu,%lu,%.1f,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%.0f,%.0f,%.0f,"
-           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u",
+           "%.1f,%.1f,%.1f,%.2f,%.1f,%.1f,%.0f,%.0f,%.2f,%.2f,%.2f,%.3f,%.2f,%.0f,%u,%d",
            (unsigned long)now, (unsigned long)loopNo++, cycleTimeMs, manual_mode_switch,
            t.reversing, t.trapped,
            distancesAll[0], distancesAll[1], distancesAll[2], distancesAll[3],
@@ -467,7 +470,7 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
            t.bias, t.error, t.pTerm, t.iTerm, t.dTerm, t.pid,
            manual_mode_switch ? steer_output : t.steerUs,
            manual_mode_switch ? final_speed : t.speedUs,
-           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag);
+           t.steerMult, t.brake, kp, ki, kd, speed_limit, RemoteXY.connect_flag, lap_count());
   wifiLog_send(line);
 } 
 
