@@ -59,6 +59,7 @@ def main():
     with open(os.path.join(HERE, "robots.json")) as f:
         known = [k for k in json.load(f) if not k.startswith("_")]
     ap.add_argument("--robot", choices=known + ["auto"], default="auto")
+    ap.add_argument("--json", help="also write the per-run results to this file (for speed_test.py)")
     a = ap.parse_args()
     configs = [parse_config(c) for c in a.config]
     order = [c for _ in range(a.repeat) for c in configs]
@@ -106,7 +107,8 @@ def main():
     if aborted:
         print("BATCH ABORTED - " + aborted)
         print("=" * 100)
-    keys = [("lap_s", "lap s", "{:.2f}"), ("near_pct", "near wall %", "{:.1f}"), ("sat_pct", "full lock %", "{:.1f}"),
+    keys = [("laps_per_min", "laps/min", "{:.1f}"), ("lap_median", "lap s (robot)", "{:.2f}"),
+            ("near_pct", "near wall %", "{:.1f}"), ("sat_pct", "full lock %", "{:.1f}"),
             ("osc_per_s", "swings/s", "{:.2f}"), ("d_jump_rms", "D-jump us", "{:.0f}"),
             ("rev_count", "reverses", "{:.1f}"), ("speed_mean", "motor us", "{:.0f}")]
     print(f"{'setting':28s} {'runs':>4s}  " + "  ".join(f"{h:>18s}" for _, h, _ in keys))
@@ -123,6 +125,10 @@ def main():
             cells.append(f"{fmt.format(mean)}{spread}".rjust(18))
         print(f"{label(cfg):28s} {len(rs):4d}  " + "  ".join(cells))
     print("(mean, with min-max over the repeats; first 2 s of each run ignored)")
+    if a.json:
+        with open(a.json, "w") as f:
+            json.dump({"aborted": aborted, "configs": configs,
+                       "results": {str(i): rs for i, rs in results.items()}}, f, indent=1, default=float)
     return 1 if aborted else 0
 
 

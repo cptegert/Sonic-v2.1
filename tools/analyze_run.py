@@ -84,6 +84,19 @@ def lap_time(rows, min_s=2.0, max_s=20.0):
     return None, best
 
 
+def robot_laps(rows):
+    """Laps from the robot's own lap counter (telemetry column "lap", firmware with
+    lap detection): laps per minute and median lap time. NaN without the column."""
+    if not rows or "lap" not in rows[0]:
+        return {"laps_per_min": float("nan"), "lap_median": float("nan"), "laps": 0}
+    marks = [b["t_ms"] for a, b in zip(rows, rows[1:]) if b["lap"] > a["lap"]]
+    dur_min = (rows[-1]["t_ms"] - rows[0]["t_ms"]) / 60000 or 1e-9
+    times = sorted((b - a) / 1000 for a, b in zip(marks, marks[1:]))
+    return {"laps_per_min": len(marks) / dur_min,
+            "lap_median": times[len(times) // 2] if times else float("nan"),
+            "laps": len(marks)}
+
+
 def stats(rows):
     if len(rows) < 2:
         return None
@@ -113,6 +126,7 @@ def stats(rows):
         "trapped": sum(1 for r in rows if r["trapped"]),
         "near_pct": 100.0 * near / max(1, len(fwd)),
         "lap_s": lap_time(rows)[0] or float("nan"),
+        **robot_laps(rows),
     }
 
 
