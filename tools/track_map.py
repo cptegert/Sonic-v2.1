@@ -101,11 +101,34 @@ def colour_speed(us):
     return f"hsl({int(220 - 220 * f)}, 75%, 50%)"
 
 
+ARGS = None
+
+
+def refresh_tag(a):
+    return f'<meta http-equiv="refresh" content="{a.refresh}">' if a.refresh else ""
+
+
+def waiting_page(a, path, msg):
+    """Live mode before there are enough laps: a page that keeps reloading."""
+    if not a.out:
+        return
+    open(a.out, "w").write(
+        f'<!doctype html><html><head><meta charset="utf-8"><title>Track map</title>{refresh_tag(a)}'
+        '<style>body{font:16px system-ui;background:#161615;color:#ececea;padding:24px}</style></head>'
+        f'<body><h2>Track map - live</h2><p>{html.escape(os.path.basename(path))}: {html.escape(msg)}.'
+        f' This page reloads every {a.refresh} s.</p></body></html>')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="?")
     ap.add_argument("--no-open", action="store_true")
+    ap.add_argument("--out", help="write the page here (default crashlogs/track_<run>.html)")
+    ap.add_argument("--refresh", type=int, default=0,
+                    help="live mode: the page reloads itself every N seconds")
     a = ap.parse_args()
+    global ARGS
+    ARGS = a
     path = a.csv or sorted(glob.glob(os.path.join(lap_report.CRASHLOGS, "run_*.csv")), key=os.path.getmtime)[-1]
     rows = lap_report.load(path)
     bounds, how = lap_report.lap_boundaries(rows)
@@ -115,6 +138,7 @@ def main():
         if len(seg) > 20:
             laps.append(seg)
     if len(laps) < 2:
+        waiting_page(a, path, f"waiting for laps ({len(laps)} complete so far)")
         raise SystemExit("need at least 2 complete laps")
     times = sorted((l[-1]["t_ms"] - l[0]["t_ms"]) / 1000 for l in laps)
     med = times[len(times) // 2]
@@ -235,12 +259,12 @@ def main():
                 + f'<text x="{CX}" y="{CY + 22}" text-anchor="middle" class="part">median {med:.2f} s</text></svg>')
 
     name = os.path.basename(path)
-    out = os.path.join(lap_report.CRASHLOGS, "track_" + name.replace(".csv", ".html"))
+    out = a.out or os.path.join(lap_report.CRASHLOGS, "track_" + name.replace(".csv", ".html"))
     layer_svg = {k: "\n".join(v) for k, v in layers.items()}
     buttons = '<button data-l="speed" class="on">Speed</button><button data-l="trouble">Trouble</button>'
     if has_map:
         buttons += '<button data-l="map">Speed map</button>'
-    page = f"""<!doctype html><html><head><meta charset="utf-8"><title>Track map</title>
+    page = f"""<!doctype html><html><head><meta charset="utf-8"><title>Track map</title>{refresh_tag(a)}
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 :root {{ --bg:#fafaf8; --fg:#1d1d1b; --muted:#6b6b66; --line:#c9c9c3; --card:#fff; }}
@@ -284,7 +308,11 @@ const show = k => {{ document.querySelectorAll('.layer').forEach(g => g.style.di
   document.querySelectorAll('.rl').forEach(g => g.style.display = g.id === 'r-' + k ? '' : 'none');
   document.querySelectorAll('.btns button').forEach(b => b.classList.toggle('on', b.dataset.l === k));
   document.getElementById('lg').textContent = L[k]; }};
-document.querySelectorAll('.btns button').forEach(b => b.onclick = () => show(b.dataset.l)); show('speed');
+// remember the chosen layer across the live reloads
+const keep = k => {{ try {{ localStorage.setItem('trackLayer', k); }} catch (e) {{}} }};
+let start = 'speed'; try {{ start = localStorage.getItem('trackLayer') || 'speed'; }} catch (e) {{}}
+if (!L[start] || !document.querySelector('[data-l="' + start + '"]')) start = 'speed';
+document.querySelectorAll('.btns button').forEach(b => b.onclick = () => {{ show(b.dataset.l); keep(b.dataset.l); }}); show(start);
 </script></body></html>"""
     open(out, "w").write(page)
     print(f"track map: {out}")
