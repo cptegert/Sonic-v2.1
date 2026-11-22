@@ -73,14 +73,17 @@ static void logLapSummary(int lapNo, float lapS) {
 #define SIG_MAX 200            // samples = 20 s lap max
 #define WW_WIN 15              // 1.5 s compared each step
 #define WW_ALPHA 0.08f
-static float sigS[SIG_MAX], sigR[SIG_MAX];     // steering -1..1, (right-left)/100
+// stored as int8 (steering x100, right-left in cm) to save RAM (heap is tight with
+// Wi-Fi + Bluetooth): ~1.4 KB in all
+static int8_t sigS[SIG_MAX], sigR[SIG_MAX];
 static int sigN = 0;
-static float recS[SIG_MAX], recR[SIG_MAX];
+static int8_t recS[SIG_MAX], recR[SIG_MAX];
 static int recN = 0;
 static bool recOk = false;
 static float histS[WW_WIN], histR[WW_WIN];
 static int histPos = 0, histN = 0;
-static float trF[SIG_MAX], trB[SIG_MAX], tmpF[SIG_MAX], tmpB[SIG_MAX];
+static int16_t trF[SIG_MAX], trB[SIG_MAX];     // tracker scores x10000
+static inline int8_t q8(float v) { return (int8_t)constrain(lroundf(v), -127, 127); }
 static int trWarm = 0;
 static int wwFwd = 0, wwRev = 0, wwPos = -1, wwCount = 0;
 static bool wwDetected = false;
@@ -90,8 +93,8 @@ static void sigLapStart() { recN = 0; recOk = true; }
 static void sigRecord(float st, float rl, bool disturbed) {
   if (!recOk) return;
   if (disturbed || recN >= SIG_MAX) { recOk = false; return; }
-  recS[recN] = st;
-  recR[recN] = rl;
+  recS[recN] = q8(st * 100);
+  recR[recN] = q8(rl * 100);
   recN++;
 }
 
@@ -107,8 +110,8 @@ static void sigLapDone(bool consistent) {
   if (consistent && recOk && recN >= 3 * WW_WIN) {
     if (sigN == 0 || abs(recN - sigN) > sigN / 6) {
       bool first = sigN == 0;
-      memcpy(sigS, recS, recN * sizeof(float));
-      memcpy(sigR, recR, recN * sizeof(float));
+      memcpy(sigS, recS, recN);
+      memcpy(sigR, recR, recN);
       sigN = recN;
       trackerReset();
       if (first) logEvent("lap signature learned (%d samples): wrong-way check on", sigN);
@@ -118,8 +121,8 @@ static void sigLapDone(bool consistent) {
         int a = (int)x;
         float f = x - a;
         int b = a + 1 < recN ? a + 1 : a;
-        sigS[i] = 0.7f * sigS[i] + 0.3f * (recS[a] * (1 - f) + recS[b] * f);
-        sigR[i] = 0.7f * sigR[i] + 0.3f * (recR[a] * (1 - f) + recR[b] * f);
+        sigS[i] = q8(0.7f * sigS[i] + 0.3f * (recS[a] * (1 - f) + recS[b] * f));
+        sigR[i] = q8(0.7f * sigR[i] + 0.3f * (recR[a] * (1 - f) + recR[b] * f));
       }
     }
   }
@@ -133,8 +136,8 @@ static float segCos(int k, bool backwards) {
     int h = (histPos + j) % WW_WIN;                     // oldest first
     int idx = backwards ? (k + WW_WIN - 1 - j) : (k + j);
     idx %= sigN;
-    float s1 = backwards ? -sigS[idx] : sigS[idx];
-    float s2 = backwards ? -sigR[idx] : sigR[idx];
+    float s1 = (backwards ? -sigS[idx] : sigS[idx]) * 0.01f;
+    float s2 = (backwards ? -sigR[idx] : sigR[idx]) * 0.01f;
     dot += histS[h] * s1 + histR[h] * s2;
     nw += histS[h] * histS[h] + histR[h] * histR[h];
     ns += s1 * s1 + s2 * s2;
@@ -150,22 +153,30 @@ static void wrongWayCheck(float st, float rl, bool disturbed) {
   if (sigN < 3 * WW_WIN || histN < WW_WIN) { wwFwd = wwRev = 0; wwPos = -1; return; }
   if (disturbed) return;                                // reversing / stuck: hold
   int n = sigN;
-  float bf = -1, bb = -1;
-  int bk = 0;
+  int bfi = -32768, bbi = -32768, bk = 0;
+  // forward tracker: new F[k] from old F[k], F[k-1], F[k-2] -> ascending, keep the old values
+  int16_t o1 = trF[n - 1], o2 = trF[n - 2];          // old F[k-1], F[k-2] (wrap)
   for (int k = 0; k < n; k++) {
-    float pf = trF[k], a1 = trF[(k + n - 1) % n], a2 = trF[(k + n - 2) % n];
-    if (a1 > pf) pf = a1;
-    if (a2 > pf) pf = a2;
-    float pb = trB[k], b1 = trB[(k + 1) % n], b2 = trB[(k + 2) % n];
-    if (b1 > pb) pb = b1;
-    if (b2 > pb) pb = b2;
-    tmpF[k] = (1 - WW_ALPHA) * pf + WW_ALPHA * segCos(k, false);
-    tmpB[k] = (1 - WW_ALPHA) * pb + WW_ALPHA * segCos(k, true);
-    if (tmpF[k] > bf) { bf = tmpF[k]; bk = k; }
-    if (tmpB[k] > bb) bb = tmpB[k];
+    int16_t old = trF[k];
+    int16_t p = old > o1 ? old : o1;
+    if (o2 > p) p = o2;
+    trF[k] = (int16_t)((1 - WW_ALPHA) * p + WW_ALPHA * 10000 * segCos(k, false));
+    if (trF[k] > bfi) { bfi = trF[k]; bk = k; }
+    o2 = o1;
+    o1 = old;
   }
-  memcpy(trF, tmpF, n * sizeof(float));
-  memcpy(trB, tmpB, n * sizeof(float));
+  // backward tracker: new B[k] from old B[k], B[k+1], B[k+2] -> descending
+  int16_t q1 = trB[0], q2 = trB[1];                   // old B[k+1], B[k+2] for k = n-1 (wrap)
+  for (int k = n - 1; k >= 0; k--) {
+    int16_t old = trB[k];
+    int16_t p = old > q1 ? old : q1;
+    if (q2 > p) p = q2;
+    trB[k] = (int16_t)((1 - WW_ALPHA) * p + WW_ALPHA * 10000 * segCos(k, true));
+    if (trB[k] > bbi) bbi = trB[k];
+    q2 = q1;
+    q1 = old;
+  }
+  float bf = bfi / 10000.0f, bb = bbi / 10000.0f;
   wwFwd = (int)(bf * 100);
   wwRev = (int)(bb * 100);
   wwPos = ((bk + WW_WIN - 1) % n) * 1000 / n;           // end of the window = now
