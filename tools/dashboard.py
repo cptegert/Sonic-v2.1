@@ -993,9 +993,18 @@ def main():
     ap.add_argument("--port", type=int, default=8770)
     ap.add_argument("--no-open", action="store_true")
     a = ap.parse_args()
+    srv = None
+    for port in range(a.port, a.port + 5):
+        try:
+            srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            break
+        except OSError:
+            print(f"port {port} is busy - another dashboard still running? (old roblog: Ctrl+C in its "
+                  f"terminal; two robots at once also fight over the laptop's Wi-Fi)", flush=True)
+    if srv is None:
+        sys.exit("no free port")
     APP = App(a.robot)
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    url = f"http://localhost:{a.port}"
+    url = f"http://localhost:{port}"
     print(f"dashboard for {a.robot}: {url}   (log: {APP.link.log_path})")
     print(f"laptop must be on the robot's Wi-Fi ({APP.robots[a.robot].get('ssid')}). Ctrl+C to quit.", flush=True)
     if not a.no_open:
