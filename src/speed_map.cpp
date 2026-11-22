@@ -14,6 +14,8 @@ static bool haveTmpl = false;
 
 static bool trouble[SPEEDMAP_PARTS];   // in the current lap
 static bool enabled = true;
+static bool dynamicUp = false;          // "map dynamic": also faster where it is safe
+static float ceilF[SPEEDMAP_PARTS];     // dynamic: factor where trouble happened (minus a bit)
 static bool dirty = false;             // learned something since the last save
 static bool wasDriving = false;
 static int currentPart = -1;
@@ -27,11 +29,11 @@ static void resetPartMin() { for (int i = 0; i < SPEEDMAP_PARTS; i++) partMin[i]
 static void key(char *buf, char c, int i) { snprintf(buf, 8, "%c%d", c, i); }
 
 static void resetMap() {
-  for (int i = 0; i < SPEEDMAP_PARTS; i++) factor[i] = 1.0f;
+  for (int i = 0; i < SPEEDMAP_PARTS; i++) { factor[i] = 1.0f; ceilF[i] = SPEEDMAP_MAX_FACTOR; }
 }
 
 static bool learnedAny() {
-  for (int i = 0; i < SPEEDMAP_PARTS; i++) if (factor[i] < 0.995f) return true;
+  for (int i = 0; i < SPEEDMAP_PARTS; i++) if (fabsf(factor[i] - 1.0f) > 0.005f) return true;
   return false;
 }
 
@@ -49,6 +51,7 @@ static void saveSlot() {
   key(k, 'u', slot); p.putUInt(k, use);
   p.putUChar("cur", slot);
   p.putBool("on", enabled);
+  p.putBool("up", dynamicUp);
   p.end();
   dirty = false;
 }
@@ -63,7 +66,7 @@ static void loadSlot(Preferences &p, int i) {
   key(k, 'f', i);
   if (p.getBytesLength(k) == sizeof(factor)) p.getBytes(k, factor, sizeof(factor));
   for (int j = 0; j < SPEEDMAP_PARTS; j++)  // sanity
-    if (!(factor[j] >= SPEEDMAP_MIN_FACTOR && factor[j] <= 1.0f)) factor[j] = 1.0f;
+    if (!(factor[j] >= SPEEDMAP_MIN_FACTOR && factor[j] <= SPEEDMAP_MAX_FACTOR)) factor[j] = 1.0f;
   key(k, 'l', i);
   mapLapS = p.getFloat(k, 0);
   key(k, 't', i);
@@ -78,6 +81,7 @@ void speedmap_begin() {
   Preferences p;
   p.begin("speedmap", false);
   enabled = p.getBool("on", true);
+  dynamicUp = p.getBool("up", false);
   // firmware before named tracks: one map in "f"/"lap" -> becomes track "default"
   if (!p.isKey("n0") && p.isKey("f")) {
     float f[SPEEDMAP_PARTS];
@@ -97,6 +101,7 @@ void speedmap_begin() {
 }
 
 const char *speedmap_track_name() { return trackName; }
+int speedmap_mode() { return !enabled ? 0 : dynamicUp ? 2 : 1; }
 
 // ---- lap fingerprint (lap_detect.cpp) ----
 bool speedmap_saved_template(float *out) {
@@ -118,15 +123,15 @@ void speedmap_template_learned(const float *t) {
 }
 
 static void describe(char *buf, size_t len) {
-  int n = snprintf(buf, len, "SPEEDMAP %s [%s]:", enabled ? "on" : "OFF", trackName);
+  int n = snprintf(buf, len, "SPEEDMAP %s [%s]:", !enabled ? "OFF" : dynamicUp ? "dynamic" : "on", trackName);
   bool any = false;
   for (int i = 0; i < SPEEDMAP_PARTS && n < (int)len - 10; i++) {
-    if (factor[i] < 0.995f) {
+    if (fabsf(factor[i] - 1.0f) > 0.005f) {
       n += snprintf(buf + n, len - n, " %d:%.2f", i + 1, factor[i]);
       any = true;
     }
   }
-  if (!any) snprintf(buf + n, len - n, " no slow parts");
+  if (!any) snprintf(buf + n, len - n, " nothing learned yet");
 }
 
 // called by lap_detect.cpp when a lap is completed
@@ -155,14 +160,22 @@ void speedmap_lap_done(bool consistent) {
           partBase[i] += GRIP_BASE_ALPHA * (partMin[i] - partBase[i]);
         }
       }
-      if (trouble[i]) factor[i] -= SPEEDMAP_STEP_DOWN;
+      if (trouble[i]) {
+        // too fast here: slow down; if it had been sped up, remember not to go that high again
+        if (factor[i] > 1.0f) ceilF[i] = fmaxf(1.0f, factor[i] - SPEEDMAP_CEIL_MARGIN);
+        factor[i] -= SPEEDMAP_STEP_DOWN;
+      }
       else if (slid) {
         factor[i] -= GRIP_STEP_DOWN;   // getting closer to the wall than usual: less grip
         if (dn < 40) dn += snprintf(drift + dn, sizeof(drift) - dn, " %d", i + 1);
       }
-      else factor[i] += SPEEDMAP_STEP_UP;
+      else if (factor[i] < 1.0f) factor[i] += SPEEDMAP_STEP_UP;   // recovering
+      else if (dynamicUp && partMin[i] < 999 && partMin[i] >= SPEEDMAP_SAFE_CM && factor[i] < ceilF[i])
+        factor[i] += SPEEDMAP_BOOST_STEP;                          // clean with room to spare: a bit faster
       if (factor[i] < SPEEDMAP_MIN_FACTOR) factor[i] = SPEEDMAP_MIN_FACTOR;
-      if (factor[i] > 1.0f) factor[i] = 1.0f;
+      float top = dynamicUp ? ceilF[i] : 1.0f;
+      if (factor[i] > top) factor[i] = top;     // slow-down-only mode: never above 1.0
+      if (factor[i] > SPEEDMAP_MAX_FACTOR) factor[i] = SPEEDMAP_MAX_FACTOR;
     }
     dirty = true;
     if (dn) logEvent("grip: closer to the wall than usual in part%s -> slower there", drift);
@@ -185,7 +198,7 @@ int speedmap_lap_margin() {
 // at once (they learn again if a part is still a problem), usual distances relearned
 void speedmap_wheels_cleaned() {
   for (int i = 0; i < SPEEDMAP_PARTS; i++) {
-    factor[i] += GRIP_CLEAN_RECOVER * (1.0f - factor[i]);
+    if (factor[i] < 1.0f) factor[i] += GRIP_CLEAN_RECOVER * (1.0f - factor[i]);
     partBase[i] = 0;
   }
   dirty = true;
@@ -287,13 +300,37 @@ bool speedmap_command(const char *cmd, bool driving, Print &out) {
     const char *arg = cmd[5] ? cmd + 6 : "";
     if (!arg[0]) { listTracks(out); return true; }
     if (driving) { out.println("track: not while driving"); return true; }
+    if (strncmp(arg, "rename ", 7) == 0) {
+      const char *nn = arg + 7;
+      if (!validName(nn)) { out.printf("track: name = letters, digits, - or _, max %d\n", TRACK_NAME_LEN - 1); return true; }
+      Preferences p;
+      p.begin("speedmap", true);
+      char k[8];
+      bool taken = false;
+      for (int i = 0; i < TRACK_SLOTS; i++) {
+        key(k, 'n', i);
+        if (i != slot && p.getString(k, "") == nn) taken = true;
+      }
+      p.end();
+      if (taken) { out.printf("track: '%s' exists already\n", nn); return true; }
+      logEvent("track renamed '%s' -> '%s'", trackName, nn);
+      strlcpy(trackName, nn, sizeof(trackName));
+      saveSlot();
+      listTracks(out);
+      return true;
+    }
     if (!validName(arg)) { out.printf("track: name = letters, digits, - or _, max %d\n", TRACK_NAME_LEN - 1); return true; }
     selectTrack(arg, out);
     return true;
   }
   if (strncmp(cmd, "map", 3) != 0 || (cmd[3] != 0 && cmd[3] != ' ')) return false;
   const char *arg = cmd[3] ? cmd + 4 : "";
-  if (strcmp(arg, "on") == 0) { enabled = true; saveSlot(); logEvent("speed map ON"); }
+  if (strcmp(arg, "on") == 0) {
+    enabled = true; dynamicUp = false;
+    for (int i = 0; i < SPEEDMAP_PARTS; i++) if (factor[i] > 1.0f) factor[i] = 1.0f;   // no boosts
+    saveSlot(); logEvent("speed map ON (slow down only)");
+  }
+  else if (strcmp(arg, "dynamic") == 0) { enabled = true; dynamicUp = true; saveSlot(); logEvent("speed map DYNAMIC (slower + faster)"); }
   else if (strcmp(arg, "off") == 0) { enabled = false; saveSlot(); logEvent("speed map OFF"); }
   else if (strcmp(arg, "reset") == 0) {
     if (driving) { out.println("map reset: not while driving"); return true; }
@@ -301,7 +338,7 @@ bool speedmap_command(const char *cmd, bool driving, Print &out) {
     for (int i = 0; i < SPEEDMAP_PARTS; i++) partBase[i] = 0;
     logEvent("speed map + lap mark of track '%s' reset", trackName);
   }
-  else if (arg[0]) { out.println("map | map on | map off | map reset | track [name]"); return true; }
+  else if (arg[0]) { out.println("map | map on | map dynamic | map off | map reset | track [name] | track rename <new>"); return true; }
   char buf[120];
   describe(buf, sizeof(buf));
   out.println(buf);

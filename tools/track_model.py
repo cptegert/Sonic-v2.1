@@ -74,7 +74,24 @@ def save_track(t):
 def list_tracks():
     if not os.path.isdir(TRACKS):
         return []
-    return sorted(f[:-5] for f in os.listdir(TRACKS) if f.endswith(".json"))
+    return sorted(f[:-5] for f in os.listdir(TRACKS) if f.endswith(".json") and not f.startswith("_"))
+
+
+ALIASES = os.path.join(TRACKS, "_renamed.json")    # old track name -> new (rename on every robot)
+
+
+def load_aliases():
+    try:
+        with open(ALIASES) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_aliases(a):
+    os.makedirs(TRACKS, exist_ok=True)
+    with open(ALIASES, "w") as f:
+        json.dump(a, f, indent=1)
 
 
 # --------------------------------------------------------------------------- laps

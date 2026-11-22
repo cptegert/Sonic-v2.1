@@ -19,7 +19,8 @@
 // own map, lap time and lap fingerprint (so the next drive finds the same lap mark
 // and the parts line up). "track <name>" switches (new name = learn from scratch,
 // oldest track is forgotten when full). Default track: "default".
-// Commands: map | map on | map off | map reset | track | track <name>
+// Commands: map | map on (slow down only) | map dynamic (slower + faster) | map off |
+//           map reset | track | track <name> | track rename <new>
 // Grip / dirty wheels: see GRIP_* below.
 // -----------------------------------------------------------------------------
 #ifndef SPEED_MAP_H
@@ -32,6 +33,14 @@
 #define SPEEDMAP_STEP_DOWN   0.10f
 #define SPEEDMAP_STEP_UP     0.03f
 #define SPEEDMAP_MIN_FACTOR  0.60f
+// Dynamic mode ("map dynamic", 2026-11-22): a part that was clean and never closer
+// than SPEEDMAP_SAFE_CM to a wall in a regular lap gets SPEEDMAP_BOOST_STEP faster,
+// up to SPEEDMAP_MAX_FACTOR. Trouble after speeding up: back down, and the part
+// remembers its limit (factor at the trouble minus SPEEDMAP_CEIL_MARGIN).
+#define SPEEDMAP_MAX_FACTOR  1.25f
+#define SPEEDMAP_SAFE_CM     25
+#define SPEEDMAP_BOOST_STEP  0.02f
+#define SPEEDMAP_CEIL_MARGIN 0.04f
 #define SPEEDMAP_NEW_TRACK   0.25f   // lap time differs > 25 % from the saved one -> new track
 // Grip: a part where the robot gets GRIP_DROP_CM closer to the wall than usual
 // (no hard trouble yet) is slowed by GRIP_STEP_DOWN - dirty wheels slide wider.
@@ -50,5 +59,6 @@ float speedmap_factor();               // speed multiplier now (1.0 = no change)
 int speedmap_part();                   // current part 0..PARTS-1, -1 = position unknown
 bool speedmap_command(const char *cmd, bool driving, Print &out);   // map ... / track ...
 const char *speedmap_track_name();
+int speedmap_mode();                   // 0 off, 1 slow down only, 2 dynamic
 
 #endif

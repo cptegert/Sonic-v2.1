@@ -7,7 +7,14 @@
     "macs": [
       "94:3c:c6:cd:d7:89",
       "94:3c:c6:cd:d7:88"
-    ]
+    ],
+    "turn_calib": {
+      "gain": 20.1133,
+      "offset": -0.00539,
+      "quality": 0.913,
+      "track": "default",
+      "when": "2026-11-22 16:58"
+    }
   },
   "shadow": {
     "env": "robot",
@@ -17,11 +24,11 @@
       "94:3c:c6:cd:b9:e4"
     ],
     "turn_calib": {
-      "gain": 21.84504,
-      "offset": -0.03927,
+      "gain": 21.57288,
+      "offset": -0.02067,
       "quality": 0.922,
       "track": "default",
-      "when": "2026-11-22 15:57"
+      "when": "2026-11-22 16:51"
     }
   },
   "knuckles": {

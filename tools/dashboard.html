@@ -74,7 +74,7 @@ input[type=number]{width:80px}
   <h1 id="rname">Robot</h1>
   <span id="link" class="pill">waiting</span>
   <span id="drive" class="pill">-</span>
-  <span class="kv">track <select id="trackSel"></select> <button id="newTrackBtn" title="New track: the robot starts learning it from scratch">New track…</button></span>
+  <span class="kv">track <select id="trackSel"></select> <button id="newTrackBtn" title="New track: the robot starts learning it from scratch">New track…</button> <button id="renameBtn" title="Rename this track (on this robot now, on the other robots when they connect)">Rename…</button></span>
   <span class="kv">laps <b id="hLaps">-</b></span>
   <span class="kv">last lap <b id="hLast">-</b></span>
   <span class="kv">app <b id="hBle">-</b></span>
@@ -191,6 +191,22 @@ input[type=number]{width:80px}
     <h2>Speed along the lap <small>how fast the robot drives where (average of all laps)</small></h2>
     <svg id="speedChart" viewBox="0 0 1000 260"></svg>
     <div class="legend">Thick line = average speed command, band = slowest–fastest 10 % of laps, dashed = learned speed map (right axis). Below: turns and hills. Live: blue line = robot now.</div>
+  </section>
+
+  <section class="card" data-card="learning">
+    <h2>Speed learning <small>where the robot slows down or speeds up – learned per robot and per track</small></h2>
+    <div class="row">
+      <span class="small muted">Mode:</span>
+      <button data-smap="off" title="drives the set speed everywhere">Off</button>
+      <button data-smap="on" title="slows down where it gets into trouble (wall, reversing, stuck, sliding wider)">Slow down only</button>
+      <button data-smap="dynamic" title="also faster (up to +25 %) where it drove clean with room to the walls">Dynamic: slower + faster</button>
+      <button id="mapReset" title="forget what was learned on this track">Reset learning</button>
+      <span id="smapMsg" class="small"></span>
+    </div>
+    <div class="small muted" style="margin-top:6px">After every regular lap, per part of the track: trouble there (closer than 15 cm to a wall, reversing, stuck) → 10 % slower there, and it starts braking one part earlier. Getting closer to the wall than usual (sliding wider, dirty wheels) → 3 % slower. Clean → back up. <b>Dynamic</b> also goes faster in small steps where it stayed clean with 25 cm+ room – and if that leads to trouble, it backs off and remembers its limit there. Sonic and Shadow each learn their own.</div>
+    <div id="learnFind" style="margin-top:8px"></div>
+    <svg id="learnSvg" viewBox="0 0 1000 300" style="margin-top:6px"></svg>
+    <div class="legend">Each row = one lap of the current drive (newest at the bottom), each column = a track part. Colour = speed used there: <span style="color:var(--bad)">red slower</span> · <span style="color:var(--ok)">green normal</span> · <span style="color:var(--acc)">blue faster</span>. ✕ = trouble in that lap and part. Bottom row = what it has learned now.</div>
   </section>
 
   <section class="card" data-card="wrongway">
@@ -347,13 +363,13 @@ function renderState() {
   const quiet = $('#quiet').checked;
   for (const [id, t, text] of S.events) {
     since = Math.max(since, id);
-    if (quiet && /^# robot got|viewer registered|^HB /.test(text)) continue;
+    if (quiet && /^# robot got|viewer registered|^HB |^factors:|^map learned at/.test(text)) continue;
     const cls = /MARK/.test(text) ? 'mark' : /NO DATA|ERROR|BOOT|CRASH|LOST|ABORT/i.test(text) ? 'bad' : /TRAPPED|NOT MOVING|slow loop|FAIL|BLIND|reverse/i.test(text) ? 'warn' : /LAP |connected|lap mark found/.test(text) ? 'ok' : '';
     const div = document.createElement('div'); div.className = cls; div.textContent = t + ' ' + text; log.appendChild(div);
   }
   while (log.childNodes.length > 800) log.removeChild(log.firstChild);
   if (atBottom) log.scrollTop = log.scrollHeight;
-  renderLaps(); renderSpeedTest(); renderRobot(); renderPosLegend(); renderWrongWay(); renderTest();
+  renderLaps(); renderSpeedTest(); renderRobot(); renderPosLegend(); renderWrongWay(); renderTest(); renderLearning();
   posAt = performance.now();
 }
 
@@ -408,9 +424,9 @@ function speedCol(us) { const f = Math.max(0, Math.min(1, (us - 1550) / 300)); r
 function binColour(p, i) {
   if (layer === 'speed') return speedCol(p.speed[i]);
   if (layer === 'trouble') { const t = Math.max(p.near[i], p.rev[i]); return t > 0.3 ? 'var(--bad)' : (t > 0.1 || p.lock[i] > 0.6) ? 'var(--warn)' : 'var(--ok)'; }
-  const f = p.smf[i]; return f > 0.97 ? 'var(--ok)' : f > 0.8 ? 'var(--warn)' : 'var(--bad)';
+  const f = p.smf[i]; return f > 1.02 ? 'var(--acc)' : f > 0.97 ? 'var(--ok)' : f > 0.8 ? 'var(--warn)' : 'var(--bad)';
 }
-const LEG = {speed: 'Speed command: blue = slow … red = fast.', trouble: 'Trouble: red = near the wall or reversing in > 30 % of laps, orange = sometimes / mostly full lock, green = fine.', map: 'Learned speed map: green = full speed, orange = slowed to 80–97 %, red = below 80 %.'};
+const LEG = {speed: 'Speed command: blue = slow … red = fast.', trouble: 'Trouble: red = near the wall or reversing in > 30 % of laps, orange = sometimes / mostly full lock, green = fine.', map: 'Learned speed map: blue = faster than set (dynamic), green = set speed, orange = slowed to 80–97 %, red = below 80 %.'};
 function fitFn(xy, W = 1000, H = 700, pad = 60) {
   const xs = xy.map(p => p[0]), ys = xy.map(p => p[1]);
   const mnx = Math.min(...xs), mny = Math.min(...ys), w = Math.max(...xs) - mnx || 1, h = Math.max(...ys) - mny || 1;
@@ -533,6 +549,58 @@ function drawRing() {
   out += `<circle cx="${CX}" cy="${CY - R}" r="8" fill="var(--fg)"/><text x="${CX}" y="${CY}" text-anchor="middle" font-size="22" font-weight="600" fill="var(--fg)">${p.laps} laps</text><text x="${CX}" y="${CY + 24}" text-anchor="middle" font-size="14" fill="var(--muted)">lap ≈ ${p.lap_s.toFixed(2)} s · dot = lap mark</text>`;
   svg.innerHTML = out;
 }
+
+// ---------------------------------------------------------------- speed learning
+const fCol = f => f == null ? 'var(--soft)' : f > 1.02 ? `hsl(220,70%,${Math.max(35, 62 - (f - 1) * 120)}%)` : f > 0.97 ? 'var(--ok)' : `hsl(${Math.max(0, 40 - (1 - f) * 100)},80%,50%)`;
+function renderLearning() {
+  const Lr = S.learning, mode = {'0': 'off', '1': 'on', '2': 'dynamic'}[Lr.mode];
+  $$('[data-smap]').forEach(b => b.classList.toggle('on', b.dataset.smap === mode));
+  const laps = Lr.laps, F = Lr.factors, rows = laps.length + (F ? 1 : 0);
+  const cw = 900 / 20, rh = Math.min(18, 260 / Math.max(1, rows));
+  let o = '';
+  for (let k = 0; k < 20; k++) o += `<text x="${80 + k * cw + cw / 2}" y="12" text-anchor="middle" font-size="11" fill="var(--muted)">${k + 1}</text>`;
+  laps.forEach((l, r) => {
+    const y = 18 + r * rh;
+    o += `<text x="72" y="${y + rh * 0.75}" text-anchor="end" font-size="${Math.min(12, rh)}" fill="var(--muted)">lap ${l.lap}</text>`;
+    l.cells.forEach(([f, bad], k) => {
+      o += `<rect x="${80 + k * cw}" y="${y}" width="${cw - 1}" height="${rh - 1}" fill="${fCol(f)}"><title>lap ${l.lap}, part ${k + 1}: ${f == null ? 'no data' : 'x' + f.toFixed(2)}${bad ? ' – trouble' : ''}</title></rect>`;
+      if (bad) o += `<text x="${80 + k * cw + cw / 2}" y="${y + rh * 0.8}" text-anchor="middle" font-size="${rh}" font-weight="700" fill="var(--fg)">✕</text>`;
+    });
+  });
+  if (F) {
+    const y = 22 + laps.length * rh;
+    o += `<text x="72" y="${y + 13}" text-anchor="end" font-size="12" font-weight="700" fill="var(--fg)">learned</text>`;
+    F.forEach((f, k) => o += `<rect x="${80 + k * cw}" y="${y}" width="${cw - 1}" height="18" fill="${fCol(f)}"/><text x="${80 + k * cw + cw / 2}" y="${y + 13}" text-anchor="middle" font-size="11" fill="#fff">${f.toFixed(2)}</text>`);
+  }
+  if (!rows) o += '<text x="500" y="40" text-anchor="middle" fill="var(--muted)" font-size="16">no data yet – the robot learns after 3 regular laps (it needs to know where it is)</text>';
+  $('#learnSvg').setAttribute('viewBox', `0 0 1000 ${Math.max(60, 44 + rows * rh)}`);
+  $('#learnSvg').innerHTML = o;
+  // findings in words
+  const parts = A && A.profile && A.profile.parts;
+  const turn = k => parts ? ` (${parts[k].turn}${parts[k].hill ? ', ' + hillName(parts[k].hill) : ''})` : '';
+  const trouble = k => laps.filter(l => l.cells[k][1]).map(l => l.lap);
+  const f = [];
+  if (F) {
+    F.forEach((v, k) => {
+      const tl = trouble(k);
+      if (v < 0.97) f.push(`<div>🐢 <b>part ${k + 1}</b>${turn(k)}: slowed to <b>${Math.round(v * 100)} %</b>${tl.length ? ` – trouble there in lap ${tl.slice(-5).join(', ')}` : ' – learned earlier, no trouble in this drive (recovering)'}</div>`);
+      else if (v > 1.02) f.push(`<div>🚀 <b>part ${k + 1}</b>${turn(k)}: <b>${Math.round(v * 100)} %</b> – clean with room to the walls${tl.length ? ` (but trouble in lap ${tl.slice(-3).join(', ')} – it will back off)` : ''}</div>`);
+    });
+    const recent = laps.slice(-5), probs = new Set(recent.flatMap(l => l.cells.map((c, k) => c[1] ? k : -1).filter(k => k >= 0)));
+    if (!f.length) f.push('<div class="muted">nothing learned on this track yet – everything at the set speed</div>');
+    if (recent.length >= 3) f.push(`<div class="small" style="margin-top:4px">${probs.size ? `Last ${recent.length} laps: trouble still in part ${[...probs].map(k => k + 1).join(', ')} – it keeps adjusting.` : `Last ${recent.length} laps clean – what it learned works.`}</div>`);
+  }
+  $('#learnFind').innerHTML = mode === 'off' ? '<div><b>Learning is OFF</b> – the robot drives the set speed everywhere.</div>' + f.join('') : f.join('');
+}
+$$('[data-smap]').forEach(b => b.onclick = async () => { const r = await api('/api/map/mode', {mode: b.dataset.smap}); $('#smapMsg').textContent = r.ok ? '' : (r.reply || r.error); });
+$('#mapReset').onclick = async () => { if (!confirm(`Forget everything the robot learned on track “${S.track}”?`)) return; const r = await api('/api/map/reset', {}); $('#smapMsg').textContent = r.error || (r.ok ? 'learning reset' : 'no answer'); };
+$('#renameBtn').onclick = async () => {
+  const name = (prompt(`New name for track “${S.track}” (letters, digits, - or _, max 15):`, S.track) || '').trim();
+  if (!name || name === S.track) return;
+  if (!/^[A-Za-z0-9_-]{1,15}$/.test(name)) { alert('letters, digits, - or _, max 15 characters'); return; }
+  const r = await api('/api/track/rename', {name});
+  if (r.error) alert(r.error); else { $('#trackSel').dataset.v = ''; aVer = -1; alert(`Renamed to “${name}”. ${r.robot}`); }
+};
 
 // ---------------------------------------------------------------- test drive
 const mmss = s => s == null ? '–' : `${Math.floor(Math.abs(s) / 60)}:${String(Math.round(Math.abs(s)) % 60).padStart(2, '0')}`;

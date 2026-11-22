@@ -82,6 +82,13 @@ The dashboard shows everything live and records to `crashlogs/`:
 - **Speed calibration:** drives several speeds (robot on the track, main switch OFF,
   phone app closed), scores laps per minute, and "Apply" saves the best speed on the
   robot. Pause waits after the current run (battery swap).
+- **Speed learning** (Off / Slow down only / Dynamic): the robot learns per part of
+  the track where to slow down (trouble there) and, in Dynamic, where it can go
+  faster (clean with room to the walls, up to +25 %, it backs off if that causes
+  trouble). Per robot and per track. The panel shows each lap x part and in words
+  which corners it slowed down for and why.
+- **Rename** a track next to the track list: renamed on the connected robot now and
+  on the other robots when they connect next.
 - **Dirty wheels:** the robot notices when a part of the track gets closer to the
   wall than usual (sliding wider) and slows down there. After cleaning the wheels
   press **Wheels cleaned**: the slowed parts recover at once. The blue "margin" line

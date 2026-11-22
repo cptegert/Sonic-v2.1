@@ -114,6 +114,8 @@ class Link:
         self.finished = {}      # csv path -> rows of finished drives (for the speed test)
         self.waiters = []
         self.capture = None     # list while reading the robot's diary (lines are not events then)
+        self.map_factors = None # learned speed factor per part (from the robot's "map" reply)
+        self.map_at = 0.0
         self.run_started = 0.0
         self.clock_sent = False
         threading.Thread(target=self._keepalive, daemon=True).start()
@@ -178,6 +180,7 @@ class Link:
                         self.clock_sent = True
                         tz = time.localtime().tm_gmtoff
                         self.send(f"clock {int(time.time())} {tz}")
+                        self.send("map")
                 elif self.capture is not None:
                     self.capture.append(line)
                 else:
@@ -195,6 +198,13 @@ class Link:
             self.status_at = time.time()
 
     def _parse_event(self, line):
+        fm = re.search(r"factors:((?: [\d.]+){20})", line)
+        if fm:
+            with self.lock:
+                self.map_factors = [float(x) for x in fm.group(1).split()]
+                self.map_at = time.time()
+        if "LAPSUM" in line:
+            self.send("map")          # fresh learned factors after every lap
         if "WRONG WAY? detected" in line:
             with self.lock:
                 self.ww_events.append((time.time(), True))
@@ -517,6 +527,13 @@ class App:
             time.sleep(2.0)
             # the robot's own idea of the track wins (it learns per track)
             rt = self.link.status.get("trk")
+            aliases = tm.load_aliases()
+            if rt in aliases and not self.link.driving():
+                if time.time() - getattr(self, "_alias_sent", 0) > 5:   # renamed on another robot / earlier
+                    self._alias_sent = time.time()
+                    self.link.send(f"track rename {aliases[rt]}")
+                    self.link.event(f"# track '{rt}' was renamed to '{aliases[rt]}' - renaming it on this robot too")
+                rt = None
             if rt and rt != self.robot_track_seen:
                 self.robot_track_seen = rt
                 self.set_track(rt)
@@ -609,6 +626,27 @@ class App:
             out["why"] = ("robot: lap mark not found yet / laps not regular" if "ph" in row
                           else "old firmware: no position from the robot")
         return out
+
+    # ------------------------------------------------------------------ speed learning
+    def learning(self):
+        """Per lap x part of the current drive: speed factor used + trouble there."""
+        with self.link.lock:
+            rows = list(self.link.rows)
+            factors = self.link.map_factors
+        grid = {}
+        for r in rows:
+            lap, part = int(r.get("lap", 0)), int(r.get("part", 0))
+            if part < 1 or part > 20:
+                continue
+            g = grid.setdefault(lap, [[0.0, 0, 0] for _ in range(20)])[part - 1]
+            g[0] += r.get("smf", 1.0)
+            g[1] += 1
+            if r.get("rev") or r.get("trapped") or min(r["left"], r["right"]) < 15:
+                g[2] = 1
+        laps = []
+        for lap in sorted(grid)[-30:]:
+            laps.append({"lap": lap, "cells": [[round(c[0] / c[1], 2) if c[1] else None, c[2]] for c in grid[lap]]})
+        return {"laps": laps, "factors": factors, "mode": self.link.status.get("smap")}
 
     # ------------------------------------------------------------------ test drives
     def test_start(self, mode, minutes, note):
@@ -775,6 +813,7 @@ class App:
             "speedtest": self.speedtest.to_json(), "tracks": tm.list_tracks(),
             "geometry": self.geom() or {}, "calib": self.calib(), "placement": self.placement,
             "ww": self.ww_report(), "now": time.time(), "test": self.test_json(),
+            "learning": self.learning(),
         }
 
 
@@ -888,6 +927,10 @@ class Handler(BaseHTTPRequestHandler):
             name = tm.safe_name(d.get("name"))
             if L.driving():
                 return {"error": "stop the robot first (the robot switches its speed map)"}
+            al = tm.load_aliases()
+            if name in al:
+                del al[name]
+                tm.save_aliases(al)
             r = L.ask(f"track {name}", ("track:", "not while"), timeout=1.5)
             APP.robot_track_seen = name
             APP.set_track(name)
@@ -905,6 +948,40 @@ class Handler(BaseHTTPRequestHandler):
                 tm.save_track(t)
             APP.analysis_dirty = True
             return {"ok": True}
+        if path == "/api/map/mode":
+            mode = d.get("mode")
+            if mode not in ("off", "on", "dynamic"):
+                return {"error": "mode?"}
+            r = L.ask(f"map {mode}", "SPEEDMAP", timeout=1.5)
+            return {"ok": bool(r), "reply": r or "no answer (robot connected? new firmware?)"}
+        if path == "/api/map/reset":
+            if L.driving():
+                return {"error": "stop the robot first"}
+            r = L.ask("map reset", "SPEEDMAP", timeout=1.5)
+            return {"ok": bool(r)}
+        if path == "/api/track/rename":
+            new, old = tm.safe_name(d.get("name")), APP.track
+            if L.driving():
+                return {"error": "stop the robot first"}
+            if new == old:
+                return {"ok": True}
+            if os.path.exists(tm.track_path(new)):
+                return {"error": f"a track '{new}' exists already"}
+            r = L.ask(f"track rename {new}", ("track:", "exists already", "not while"), timeout=1.5)
+            if r and ("exists already" in r or "not while" in r):
+                return {"error": "robot: " + r}
+            with APP.track_lock:
+                t = tm.load_track(old)
+                t["name"] = new
+                tm.save_track(t)
+                if os.path.exists(tm.track_path(old)):
+                    os.remove(tm.track_path(old))
+                al = {k: (new if v == old else v) for k, v in tm.load_aliases().items() if k != new}
+                al[old] = new
+                tm.save_aliases(al)
+            APP.robot_track_seen = new
+            APP.set_track(new)
+            return {"ok": True, "robot": r or "robot offline - it is renamed when it connects next time"}
         if path == "/api/test/start":
             try:
                 err = APP.test_start(d.get("mode", "app"), float(d.get("minutes", 5)), str(d.get("note", "")))
