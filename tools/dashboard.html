@@ -64,6 +64,9 @@ input[type=number]{width:80px}
 .chk{display:inline-block;width:18px;text-align:center;font-weight:700}
 .chk.ok{color:var(--ok)}.chk.no{color:var(--bad)}.chk.warn{color:var(--warn)}
 .phase{font-size:18px;font-weight:700;margin:6px 0}
+.timer{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:.5px}
+.bigbtn{font-size:17px;padding:10px 22px;font-weight:700}
+.radio label{display:block;margin:3px 0}
 .legend .sw{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:-1px;margin:0 3px 0 10px}
 .palette button svg{width:34px;height:34px;display:block;margin:0 auto 2px}
 </style></head><body>
@@ -80,6 +83,32 @@ input[type=number]{width:80px}
 </header>
 <main>
 <div class="col">
+  <section class="card" data-card="test">
+    <h2>Test drive <small>recording is always on while connected – a test adds a time limit and a summary</small></h2>
+    <div id="testIdle">
+      <div class="radio">
+        <label><input type="radio" name="tmode" value="app" checked> <b>I start the robot</b> with the app or the start button (press Start test here first)</label>
+        <label><input type="radio" name="tmode" value="laptop"> <b>The laptop starts it</b> (5 s countdown, robot on the track, main switch OFF)</label>
+      </div>
+      <div class="row" style="margin-top:6px">
+        <label>duration <input id="tMin" type="number" value="5" min="0.5" max="30" step="0.5" style="width:70px"> min</label>
+        <input id="tNote" placeholder="note, e.g. new tyres, speed 62 …" style="flex:1;min-width:160px">
+      </div>
+      <div class="row" style="margin-top:8px"><button id="tStart" class="primary bigbtn">▶ Start test</button><span id="tMsg" class="small"></span></div>
+      <div class="small muted" style="margin-top:6px">The test ends by itself when the time is up (counted from when the robot starts driving; the laptop then stops it), or when you press <b>End test</b>. Stopping the robot with the app / button in between does not end the test – start it again to continue.</div>
+      <div id="tLast" style="margin-top:8px"></div>
+    </div>
+    <div id="testRun" class="hide">
+      <div class="row" style="gap:18px;align-items:baseline">
+        <span class="timer" id="tTimer">0:00</span>
+        <span class="kv">laps <b id="tLaps">0</b></span><span class="kv">best <b id="tBest">–</b></span>
+        <span id="tState" class="small"></span>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="tEnd" class="danger bigbtn">■ End test</button><span class="small muted">stops the robot and saves the summary</span></div>
+    </div>
+    <details style="margin-top:8px"><summary class="small">Earlier tests on this track</summary><div id="tHist" class="small"></div></details>
+  </section>
+
   <section class="card" data-card="marks">
     <h2>Marks <small>exact time in the log, also sent to the robot</small></h2>
     <div class="row marks">
@@ -236,6 +265,13 @@ input[type=number]{width:80px}
     <label class="small muted"><input type="checkbox" id="quiet" checked> hide routine lines</label>
   </section>
 
+  <section class="card" data-card="diary" data-closed="1">
+    <h2>Robot's diary <small>competition rounds – recorded on the robot, no laptop needed</small></h2>
+    <div class="small">The robot writes every drive into its own memory: laps with times and trouble, the speed map, your marks, wrong-way and grip notes – also in a competition when no laptop is connected (about a whole day fits). Afterwards: connect to the robot's Wi-Fi, robot stopped, press <b>Read</b>.</div>
+    <div class="row" style="margin-top:8px"><button id="dRead" class="primary">Read the robot's diary</button><button id="dClear">Clear diary on the robot</button><span id="dMsg" class="small"></span></div>
+    <div id="dOut" style="margin-top:8px"></div>
+  </section>
+
   <section class="card" data-card="size" data-closed="1">
     <h2>Robot size <small>makes the shape estimate better</small></h2>
     <div class="row">
@@ -317,7 +353,7 @@ function renderState() {
   }
   while (log.childNodes.length > 800) log.removeChild(log.firstChild);
   if (atBottom) log.scrollTop = log.scrollHeight;
-  renderLaps(); renderSpeedTest(); renderRobot(); renderPosLegend(); renderWrongWay();
+  renderLaps(); renderSpeedTest(); renderRobot(); renderPosLegend(); renderWrongWay(); renderTest();
   posAt = performance.now();
 }
 
@@ -472,7 +508,7 @@ function renderTrack() {
   // parts table
   $('#partsTable').innerHTML = p ? '<tr><th>part</th><th>turn</th><th>speed</th><th>near wall</th><th>full lock</th><th>reverse</th><th>map</th><th>width</th><th>hill</th></tr>' +
     p.parts.map(r => `<tr><td>${r.part}</td><td>${r.turn}</td><td>${r.speed}</td><td>${r.near ? r.near + '%' : ''}</td><td>${r.lock ? r.lock + '%' : ''}</td><td>${r.rev ? r.rev + '%' : ''}</td><td>${r.smf < 0.995 ? r.smf.toFixed(2) : ''}</td><td>${r.width} cm</td><td>${hillName(r.hill)}</td></tr>`).join('') : '';
-  drawRing(); drawSpeedChart();
+  drawRing(); drawSpeedChart(); renderTestHistory();
   // editor + notes (only when not being edited)
   if (!edit.dirty) loadEditor();
   if (document.activeElement !== $('#notes')) $('#notes').value = A.notes || '';
@@ -497,6 +533,45 @@ function drawRing() {
   out += `<circle cx="${CX}" cy="${CY - R}" r="8" fill="var(--fg)"/><text x="${CX}" y="${CY}" text-anchor="middle" font-size="22" font-weight="600" fill="var(--fg)">${p.laps} laps</text><text x="${CX}" y="${CY + 24}" text-anchor="middle" font-size="14" fill="var(--muted)">lap ≈ ${p.lap_s.toFixed(2)} s · dot = lap mark</text>`;
   svg.innerHTML = out;
 }
+
+// ---------------------------------------------------------------- test drive
+const mmss = s => s == null ? '–' : `${Math.floor(Math.abs(s) / 60)}:${String(Math.round(Math.abs(s)) % 60).padStart(2, '0')}`;
+function testSummary(t) {
+  const s = t.summary || {};
+  return `<b>${esc(t.ended || '')}</b> – ${s.laps} laps${s.best ? `, best ${s.best.toFixed(2)} s, median ${s.median.toFixed(2)} s` : ''}${s.laps_per_min ? `, ${s.laps_per_min} laps/min` : ''}, drove ${mmss(s.drove_s)}` +
+    `${s.reverses || s.trapped || s.not_moving ? ` · trouble: ${s.reverses} reverse, ${s.trapped} trapped, ${s.not_moving} stuck` : ' · no trouble'}` +
+    `${s.margin_first != null && s.margin_last != null ? ` · wall margin ${s.margin_first} → ${s.margin_last} cm` : ''}${t.note ? ` · <i>${esc(t.note)}</i>` : ''}`;
+}
+function renderTest() {
+  const T = S.test;
+  $('#testIdle').classList.toggle('hide', T.running); $('#testRun').classList.toggle('hide', !T.running);
+  if (T.running) {
+    $('#tTimer').textContent = T.waiting ? `0:00 / ${mmss(T.minutes * 60)}` : `${mmss(T.elapsed)} / ${mmss(T.minutes * 60)}`;
+    $('#tLaps').textContent = T.laps; $('#tBest').textContent = T.best ? T.best.toFixed(2) + ' s' : '–';
+    $('#tState').innerHTML = T.waiting ? (T.mode === 'app' ? '<b>start the robot now</b> (app / start button) – the clock starts when it drives' : 'countdown …') : `${mmss(T.left)} left${T.note ? ' · ' + esc(T.note) : ''}`;
+  } else if (T.last) $('#tLast').innerHTML = 'Last test: ' + testSummary(T.last);
+}
+$('#tStart').onclick = async () => {
+  const mode = document.querySelector('input[name=tmode]:checked').value;
+  if (mode === 'laptop' && !confirm('The robot will start driving in 5 s. Is it on the track?')) return;
+  const r = await api('/api/test/start', {mode, minutes: +$('#tMin').value, note: $('#tNote').value});
+  $('#tMsg').innerHTML = r.error ? `<span class="err">${esc(r.error)}</span>` : '';
+};
+$('#tEnd').onclick = () => api('/api/test/end', {});
+function renderTestHistory() {
+  const ts = (A && A.tests || []).slice().reverse();
+  $('#tHist').innerHTML = ts.length ? ts.map(t => `<div>${esc(t.id.replace('_', ' '))} ${esc(t.robot)}: ${testSummary(t)}</div>`).join('') : 'none yet';
+}
+// ---------------------------------------------------------------- diary
+$('#dRead').onclick = async () => {
+  $('#dMsg').textContent = 'reading … (up to 20 s)'; $('#dOut').innerHTML = '';
+  const r = await api('/api/diary/read', {});
+  if (r.error) { $('#dMsg').innerHTML = `<span class="err">${esc(r.error)}</span>`; return; }
+  $('#dMsg').textContent = `${r.drives.length} drives – saved to ${r.path}${r.complete ? '' : ' (incomplete – Wi-Fi lost some lines, read again)'}`;
+  $('#dOut').innerHTML = r.drives.length ? '<table><tr><th>drive started</th><th>track</th><th>laps</th><th>best</th><th>median</th><th>trouble</th><th>lap times</th></tr>' +
+    r.drives.slice().reverse().map(d => `<tr><td>${esc(d.when)}</td><td>${esc(d.track)}</td><td>${d.laps.length}</td><td>${d.best ? d.best.toFixed(2) : '–'}</td><td>${d.median ? d.median.toFixed(2) : '–'}</td><td>${d.trouble || ''}</td><td style="text-align:left;white-space:normal">${d.laps.map(l => l.s.toFixed(1)).join(' ')}<details><summary class="small">notes</summary><div class="small" style="white-space:pre-wrap">${esc(d.events.join('\n'))}</div></details></td></tr>`).join('') + '</table>' : '<span class="muted">no drives in the diary yet</span>';
+};
+$('#dClear').onclick = async () => { if (!confirm('Delete the diary on the robot? (read it first!)')) return; const r = await api('/api/diary/clear', {}); $('#dMsg').textContent = r.error || (r.ok ? 'cleared' : 'no answer'); };
 
 // ---------------------------------------------------------------- live position (smooth)
 function livePos() {

@@ -17,6 +17,33 @@
 static const char    *LOG_FILE        = "/log.txt";
 static const char    *LOG_FILE_OLD    = "/log_old.txt";
 static const size_t   LOG_MAX_BYTES   = 64 * 1024;  // rotate to log_old.txt after this
+// Round diary (2026-11-22): only what matters for the next round (drives, laps, speed
+// map, marks, wrong way, grip) - survives a whole competition day, unlike the log
+// above that heartbeats fill up. Read with "rounds" (dashboard: Robot's diary).
+static const char    *ROUNDS_FILE     = "/rounds.txt";
+static const char    *ROUNDS_OLD      = "/rounds_old.txt";
+static const size_t   ROUNDS_MAX      = 48 * 1024;
+static int64_t clockBase = 0;   // unix time at millis() = 0, set by the laptop ("clock")
+static int32_t clockTz = 0;
+static const char *DIARY[] = {"LAPSUM", "SPEEDMAP", "MARK", "WRONG WAY", "right way again", "grip",
+                              "wheels cleaned", "track ->", "driving started", "driving stopped",
+                              "laps this run", "remote: start", "remote run", "remote: stop",
+                              "app: main switch", "start button", "NOT MOVING", "BLIND", "new lap mark",
+                              "lap mark", "settings saved", "remote: set", "laps ", "identity"};
+static bool isDiary(const char *m) {
+  for (const char *p : DIARY) if (strncmp(m, p, strlen(p)) == 0) return true;
+  return false;
+}
+static void stampOf(uint32_t ms, uint32_t boot, char *buf, size_t len) {
+  if (clockBase) {
+    time_t t = (time_t)(clockBase + clockTz + ms / 1000);
+    struct tm tmv;
+    gmtime_r(&t, &tmv);
+    strftime(buf, len, "%Y-%m-%d %H:%M:%S", &tmv);
+  } else {
+    snprintf(buf, len, "boot#%lu +%.1fs", (unsigned long)boot, ms / 1000.0);
+  }
+}
 static const uint32_t HB_DRIVING_MS   = 5000;       // heartbeat to flash while driving
 static const uint32_t HB_IDLE_MS      = 30000;      // heartbeat to flash while idle
 static const uint32_t FLUSH_IDLE_MS   = 1000;       // flush events to flash when not driving
@@ -138,13 +165,29 @@ static void flushEvents(uint32_t sessionBoot) {
              (unsigned long)sessionBoot, (unsigned long)(bb.evTotal - first - BB_EVENTS));
     first = bb.evTotal - BB_EVENTS;
   }
+  File d;
   for (uint32_t i = first; i < bb.evTotal; i++) {
     const BbEvent &e = bb.ev[i % BB_EVENTS];
     char msg[BB_MSG_LEN + 1];
     memcpy(msg, e.msg, BB_MSG_LEN);
     msg[BB_MSG_LEN] = 0;  // RTC data may be garbage after a weird reset
     f.printf("[#%lu %7.3fs] %s\n", (unsigned long)sessionBoot, e.ms / 1000.0, msg);
+    if (isDiary(msg)) {
+      if (!d) {
+        File r = LittleFS.open(ROUNDS_FILE, FILE_READ);
+        size_t sz = r ? r.size() : 0;
+        if (r) r.close();
+        if (sz >= ROUNDS_MAX) { LittleFS.remove(ROUNDS_OLD); LittleFS.rename(ROUNDS_FILE, ROUNDS_OLD); }
+        d = LittleFS.open(ROUNDS_FILE, FILE_APPEND);
+      }
+      if (d) {
+        char st[32];
+        stampOf(e.ms, sessionBoot, st, sizeof(st));
+        d.printf("%s %s\n", st, msg);
+      }
+    }
   }
+  if (d) d.close();
   f.close();
   bb.evFlushed = bb.evTotal;
 }
@@ -313,13 +356,34 @@ static void handleCommand(const char *cmd, bool driving, Print &out) {
     if (driving) { out.println("Not while driving"); return; }
     sensorPowerCommand(cmd, out);
     esp_task_wdt_reset();  // re-init can take a moment
+  } else if (strcmp(cmd, "rounds") == 0) {
+    if (driving) { out.println("Not while driving (turn main switch OFF)"); return; }
+    flushEvents(bootNo);
+    printFile(ROUNDS_OLD, out);
+    printFile(ROUNDS_FILE, out);
+    out.println("----- end of rounds -----");
+  } else if (strcmp(cmd, "rounds clear") == 0) {
+    if (driving) { out.println("Not while driving"); return; }
+    LittleFS.remove(ROUNDS_FILE);
+    LittleFS.remove(ROUNDS_OLD);
+    out.println("rounds cleared");
+  } else if (strncmp(cmd, "clock ", 6) == 0) {
+    long long unix = 0;
+    long tz = 0;
+    if (sscanf(cmd + 6, "%lld %ld", &unix, &tz) >= 1 && unix > 1700000000LL) {
+      clockBase = unix - millis() / 1000;
+      clockTz = tz;
+      char st[32];
+      stampOf(millis(), bootNo, st, sizeof(st));
+      out.printf("clock set: %s\n", st);
+    }
   } else if (strcmp(cmd, "clear") == 0) {
     if (driving) { out.println("Not while driving"); return; }
     LittleFS.remove(LOG_FILE);
     LittleFS.remove(LOG_FILE_OLD);
     out.println("Log cleared");
   } else if (cmd[0] != 0) {
-    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, map [on|off|reset], track [name], mark <text>, save, name [robot], clear (delete log)");
+    out.println("Commands: log (print flash log), status (live state), sensors (raw sensor data), on/off <FFL|FL|L|M|R|FR|FFR|all>, scan (I2C bus), params, set kp|ki|kd|speed <v>, start <s>, stop, map [on|off|reset], track [name], mark <text>, save, rounds [clear], name [robot], clear (delete log)");
   }
 }
 
@@ -372,7 +436,10 @@ void logger_loop(const LogSnapshot &s) {
     if (s.connected != prev.connected)     logEvent(s.connected ? "BLE app connected" : "BLE app DISCONNECTED");
     if (s.startSwitch != prev.startSwitch) logEvent("main switch %s", s.startSwitch ? "ON" : "OFF");
     if (s.manual != prev.manual)           logEvent("mode -> %s", s.manual ? "manual" : "autonomous");
-    if (s.driving != prev.driving)         logEvent(s.driving ? "driving started" : "driving stopped");
+    if (s.driving != prev.driving) {
+      if (s.driving) logEvent("driving started (track '%s')", speedmap_track_name());
+      else logEvent("driving stopped");
+    }
     // Start/stop events go to flash at once: a power-off right after a stop must not
     // erase why it stopped (2026-11-18: a stop 5 s into a drive left no trace)
     if (s.driving != prev.driving || s.startSwitch != prev.startSwitch) flushEvents(bootNo);

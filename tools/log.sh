@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # One command to log a robot live:
+#   tools/log.sh                 -> waits for any robot's Wi-Fi, then the dashboard
 #   tools/log.sh shadow          (or sonic / knuckles)  -> dashboard in the browser
 #   tools/log.sh shadow term     -> old terminal viewer (wifi_log.py) + track page
 # Joins the robot's Wi-Fi (and rejoins after robot restarts) and records everything
@@ -8,9 +9,14 @@
 # laps, the track (draw your own, the robot's data is placed on it), named tracks,
 # speed calibration. Quit with Ctrl+C - the laptop goes back to its Wi-Fi.
 cd "$(dirname "$0")/.." || exit 1
-ROBOT="${1:-shadow}"
-MODE="${2:-dashboard}"
 PY="$HOME/.platformio/penv/bin/python"
+ROBOT="$1"
+MODE="${2:-dashboard}"
+if [ -z "$ROBOT" ] || [ "$ROBOT" = "auto" ]; then
+  # no name: wait for any robot's Wi-Fi (switch a robot on and it starts logging)
+  ROBOT=$("$PY" tools/find_robot.py) || exit 1
+  echo "robot in reach: $ROBOT"
+fi
 "$PY" tools/watch_robot.py --robot "$ROBOT" --minutes 180 --no-recorder > /dev/null 2>&1 &
 WATCH=$!
 trap 'kill -INT $WATCH 2>/dev/null; wait $WATCH 2>/dev/null' EXIT

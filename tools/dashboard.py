@@ -113,6 +113,9 @@ class Link:
         self.last_t = None
         self.finished = {}      # csv path -> rows of finished drives (for the speed test)
         self.waiters = []
+        self.capture = None     # list while reading the robot's diary (lines are not events then)
+        self.run_started = 0.0
+        self.clock_sent = False
         threading.Thread(target=self._keepalive, daemon=True).start()
         threading.Thread(target=self._rx, daemon=True).start()
 
@@ -161,6 +164,7 @@ class Link:
             self.last_rx = time.time()
             if not self.connected:
                 self.connected = True
+                self.clock_sent = False
                 self.event("# robot connected")
             for line in data.decode("utf-8", "replace").splitlines():
                 if line.startswith("T,"):
@@ -170,6 +174,12 @@ class Link:
                 elif line.startswith("S "):
                     self.log.write(f"{now_stamp()} {line}\n")
                     self._status(line[2:])
+                    if not self.clock_sent:   # robot's diary gets real date / time
+                        self.clock_sent = True
+                        tz = time.localtime().tm_gmtoff
+                        self.send(f"clock {int(time.time())} {tz}")
+                elif self.capture is not None:
+                    self.capture.append(line)
                 else:
                     self.event(line)
                     self._parse_event(line)
@@ -481,6 +491,8 @@ class App:
         self.robot_track_seen = None
         self.placement = None       # where you put the robot for the NEXT drive (tile + direction)
         self.run_start = {}         # run file -> placement used for that drive
+        self.test = None            # the test drive running now (dict)
+        self.last_test = None       # summary of the last one
         self.ww_want = None         # what you last said: True wrong way / False right way
         self.ww_sent = 0.0
         threading.Thread(target=self._analysis_loop, daemon=True).start()
@@ -517,6 +529,7 @@ class App:
                                     f"{self.placement['y']}) facing {tm.SIDE_NAME[self.placement['dir']]}")
                 self.placement = None                 # used up: mark it again for the next drive
                 self.ww_want = None                   # the robot starts every drive "right way"
+            self._test_tick()
             # the robot did not get your wrong-way / right-way button (Wi-Fi gap): send again
             st = self.link.status
             if (self.ww_want is not None and self.link.driving() and "ww" in st
@@ -597,6 +610,122 @@ class App:
                           else "old firmware: no position from the robot")
         return out
 
+    # ------------------------------------------------------------------ test drives
+    def test_start(self, mode, minutes, note):
+        L = self.link
+        if self.test:
+            return "a test is already running - End it first"
+        if not 0.5 <= minutes <= 30:
+            return "duration 0.5 .. 30 min"
+        if mode == "laptop":
+            st = L.status
+            if not (L.connected and time.time() - L.status_at < 3):
+                return "robot not connected (Wi-Fi)"
+            if L.driving() or st.get("sw") == "1":
+                return "the robot is already driving / main switch ON - stop it first"
+            r = L.ask(f"start {int(minutes * 60)} free", ("starting", "Already ON", "refusing", "start 1.."))
+            if not r or "refusing" in r or "start 1.." in r:
+                return f"robot refused: {r or 'no reply'}"
+        self.test = {"id": time.strftime("%Y-%m-%d_%H%M%S"), "start": time.time(), "mode": mode,
+                     "minutes": minutes, "note": note[:200], "track": self.track, "robot": self.robot,
+                     "drive_start": None, "runs": []}
+        L.mark(f"TEST START ({'laptop starts it' if mode == 'laptop' else 'start with app / button'}, "
+               f"{minutes:g} min){': ' + note if note else ''}", "mark test start")
+        return None
+
+    def _test_tick(self):
+        t = self.test
+        if not t:
+            return
+        L = self.link
+        if L.csv_path and L.csv_path not in t["runs"] and L.run_started >= t["start"] - 2:
+            t["runs"].append(L.csv_path)
+        if t["drive_start"] is None and L.driving():
+            t["drive_start"] = time.time()
+        if t["drive_start"] and time.time() >= t["drive_start"] + t["minutes"] * 60:
+            L.send("stop")            # time is up (the robot also stops itself if the laptop started it)
+            self.test_end("time is up")
+
+    def test_end(self, why):
+        t = self.test
+        if not t:
+            return None
+        self.test = None
+        L = self.link
+        L.send("stop")
+        t["end"] = time.time()
+        t["ended"] = why
+        with L.lock:
+            laps = [dict(l) for l in L.laps if t["start"] <= l["at"] <= t["end"]]
+            marks = [(round(a - t["start"], 1), txt) for a, _, txt in L.marks if t["start"] <= a <= t["end"]]
+        times = sorted(l["s"] for l in laps)
+        drove = (t["end"] - t["drive_start"]) if t["drive_start"] else 0
+        t["summary"] = {
+            "laps": len(laps), "best": times[0] if times else None,
+            "median": times[len(times) // 2] if times else None,
+            "laps_per_min": round(len(laps) / (drove / 60), 2) if drove > 30 else None,
+            "drove_s": round(drove), "reverses": sum(l["rev"] for l in laps),
+            "trapped": sum(l["trap"] for l in laps), "not_moving": sum(l["notmov"] for l in laps),
+            "margin_first": next((l["margin"] for l in laps if l.get("margin") is not None), None),
+            "margin_last": next((l["margin"] for l in reversed(laps) if l.get("margin") is not None), None),
+            "marks": marks, "lap_times": [l["s"] for l in laps],
+        }
+        L.mark(f"TEST END ({why}): {len(laps)} laps" + (f", best {times[0]:.2f} s" if times else ""), "mark test end")
+        with open(f"crashlogs/test_{t['id']}_{t['robot']}.json", "w") as f:
+            json.dump(t, f, indent=1)
+        with self.track_lock:
+            tr = tm.load_track(t["track"])
+            tr.setdefault("tests", []).append({k: t[k] for k in ("id", "robot", "mode", "minutes", "note", "ended", "summary")})
+            tr["tests"] = tr["tests"][-40:]
+            tm.save_track(tr)
+        self.last_test = t
+        self.analysis_dirty = True
+        return t
+
+    def test_json(self):
+        t = self.test
+        if t:
+            now = time.time()
+            with self.link.lock:
+                laps = [l for l in self.link.laps if l["at"] >= t["start"]]
+            left = (t["drive_start"] + t["minutes"] * 60 - now) if t["drive_start"] else None
+            return {"running": True, "mode": t["mode"], "minutes": t["minutes"], "note": t["note"],
+                    "waiting": t["drive_start"] is None, "elapsed": round(now - (t["drive_start"] or now)),
+                    "left": round(left) if left is not None else None, "laps": len(laps),
+                    "best": min((l["s"] for l in laps), default=None)}
+        return {"running": False, "last": self.last_test and {k: self.last_test[k] for k in
+                                                              ("id", "mode", "minutes", "note", "ended", "summary")}}
+
+    # ------------------------------------------------------------------ robot's diary
+    def read_diary(self):
+        L = self.link
+        if L.driving():
+            return {"error": "stop the robot first"}
+        L.capture = []
+        try:
+            L.send("rounds")
+            end = time.time() + 25
+            last_n, quiet_since = 0, time.time()
+            while time.time() < end:
+                time.sleep(0.3)
+                lines = L.capture
+                if any("end of rounds" in x for x in lines):
+                    break
+                if len(lines) != last_n:
+                    last_n, quiet_since = len(lines), time.time()
+                elif lines and time.time() - quiet_since > 4:
+                    break
+            lines = list(L.capture)
+        finally:
+            L.capture = None
+        if not lines:
+            return {"error": "no answer (robot connected? new firmware?)"}
+        path = time.strftime(f"crashlogs/diary_{self.robot}_%Y-%m-%d_%H%M%S.txt")
+        with open(path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+        complete = any("end of rounds" in x for x in lines)
+        return {"ok": True, "path": path, "complete": complete, "drives": parse_diary(lines)}
+
     def ww_report(self):
         """Your wrong-way marks vs the robot's own detection (this session)."""
         L = self.link
@@ -645,8 +774,43 @@ class App:
             "pos": self.live_position(), "analysis_ver": self.analysis_ver,
             "speedtest": self.speedtest.to_json(), "tracks": tm.list_tracks(),
             "geometry": self.geom() or {}, "calib": self.calib(), "placement": self.placement,
-            "ww": self.ww_report(), "now": time.time(),
+            "ww": self.ww_report(), "now": time.time(), "test": self.test_json(),
         }
+
+
+def parse_diary(lines):
+    """Robot diary lines -> drives: [{when, track, laps:[...], best, median, events:[...]}]"""
+    drives, cur = [], None
+    for line in lines:
+        m = re.match(r"(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d|boot#\d+ \+[\d.]+s) (.*)", line)
+        if not m:
+            continue
+        when, msg = m.groups()
+        if msg.startswith("driving started"):
+            tr = re.search(r"track '([^']*)'", msg)
+            cur = {"when": when, "track": tr.group(1) if tr else "?", "laps": [], "events": []}
+            drives.append(cur)
+            continue
+        if cur is None:
+            continue
+        lm = re.match(r"LAPSUM (\d+) ([\d.]+)s rev(\d+) trap(\d+) notmov(\d+) blind(\d+) minwall(-?\d+)cm "
+                      r"lock(\d+)% minspd(\d+)% spd(\d+)us(?: margin(\d+)cm)?", msg)
+        if lm:
+            g = lm.groups()
+            cur["laps"].append({"lap": int(g[0]), "s": float(g[1]), "rev": int(g[2]), "trap": int(g[3]),
+                                "notmov": int(g[4]), "spd": int(g[9]), "margin": int(g[10]) if g[10] else None})
+        elif msg.startswith("driving stopped"):
+            cur["end"] = when
+            cur = None
+        elif not msg.startswith(("laps this run", "lap mark")):
+            cur["events"].append(f"{when[-8:]} {msg}")
+    for d in drives:
+        ts = sorted(l["s"] for l in d["laps"])
+        d["best"] = ts[0] if ts else None
+        d["median"] = ts[len(ts) // 2] if ts else None
+        d["trouble"] = sum(l["rev"] + l["trap"] + l["notmov"] for l in d["laps"])
+        d["events"] = d["events"][-30:]
+    return drives
 
 
 # =============================================================================== http
@@ -741,6 +905,22 @@ class Handler(BaseHTTPRequestHandler):
                 tm.save_track(t)
             APP.analysis_dirty = True
             return {"ok": True}
+        if path == "/api/test/start":
+            try:
+                err = APP.test_start(d.get("mode", "app"), float(d.get("minutes", 5)), str(d.get("note", "")))
+            except ValueError:
+                err = "minutes?"
+            return {"error": err} if err else {"ok": True}
+        if path == "/api/test/end":
+            t = APP.test_end("you pressed End")
+            return {"ok": True, "summary": t and t["summary"]}
+        if path == "/api/diary/read":
+            return APP.read_diary()
+        if path == "/api/diary/clear":
+            if L.driving():
+                return {"error": "stop the robot first"}
+            r = L.ask("rounds clear", "rounds cleared", timeout=2)
+            return {"ok": bool(r)}
         if path == "/api/placement":
             if d.get("clear"):
                 APP.placement = None

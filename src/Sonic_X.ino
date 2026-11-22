@@ -503,15 +503,17 @@ void sendTelemetry(bool driving, float cycleTimeMs) {
 // REMOTE RUN CONTROL (laptop over Wi-Fi or USB serial), for automated PID tests
 //   params                 show current values
 //   set kp|ki|kd|speed <v> change a value (not while driving; same as the app sliders)
-//   start <seconds>        full 5 s countdown, then drive for max <seconds> (1..120)
+//   start <seconds> [free] full 5 s countdown, then drive for max <seconds> (1..1800);
+//                          free = keep going if the Wi-Fi link drops (test drives)
 //   stop                   main switch OFF
 // Safety: a remote-started run ALWAYS stops by itself when its time is up, and
 // stops within REMOTE_LINK_TIMEOUT_MS if the laptop stops sending (link lost).
 // The physical button and the phone app can stop it at any time.
 // ============================================================================
 static const uint32_t REMOTE_LINK_TIMEOUT_MS = 1000;
-static const uint32_t REMOTE_MAX_RUN_S = 120;
+static const uint32_t REMOTE_MAX_RUN_S = 1800;   // 30 min (test drives from the dashboard)
 static bool remoteRun = false;
+static bool remoteFree = false;   // "start <s> free": keeps driving if the Wi-Fi link drops
 static uint32_t remoteRunEndMs = 0;
 
 static void printParams(Print &out) {
@@ -614,7 +616,8 @@ bool remoteCommand(const char *cmd, bool driving, Print &out) {
     return true;
   }
   int seconds;
-  if (sscanf(cmd, "start %d", &seconds) == 1) {
+  char opt[8] = "";
+  if (sscanf(cmd, "start %d %7s", &seconds, opt) >= 1) {
     if (RemoteXY.Start_switch) { out.println("Already ON"); return true; }
     if (RemoteXY.manual_mode_switch) { out.println("Manual mode is ON in the app - refusing"); return true; }
     if (wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
@@ -625,8 +628,9 @@ bool remoteCommand(const char *cmd, bool driving, Print &out) {
     RemoteXY.Start_switch = 1;
     startedByButton = true;  // forces the full 5 s countdown (bypass switch ignored)
     remoteRun = true;
+    remoteFree = strcmp(opt, "free") == 0;
     remoteRunEndMs = millis() + START_DELAY_MS + (uint32_t)seconds * 1000;
-    logEvent("remote: start, 5 s countdown + %d s", seconds);
+    logEvent("remote: start, 5 s countdown + %d s%s", seconds, remoteFree ? " (keeps going without Wi-Fi)" : "");
     out.printf("starting: 5 s countdown, then %d s\n", seconds);
     return true;
   }
@@ -643,7 +647,7 @@ void remoteRunWatchdog() {
     RemoteXY.Start_switch = 0;
     remoteRun = false;
     logEvent("remote run: time up, stopped");
-  } else if (wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
+  } else if (!remoteFree && wifiLog_msSinceViewer() > REMOTE_LINK_TIMEOUT_MS) {
     RemoteXY.Start_switch = 0;
     remoteRun = false;
     logEvent("remote run: laptop link LOST, stopped");

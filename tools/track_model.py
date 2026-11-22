@@ -737,6 +737,7 @@ def analyse(track, robot, geom=None, live_profile=None, live_key=None, calib=Non
         prior = {"mark_frac": (lay["start_frac"] + newest["mark_after_s"] / newest["lap_s"]) % 1.0}
     res = {"name": track["name"], "notes": track.get("notes", ""), "layout": track.get("layout"),
            "speedtests": track.get("speedtests", [])[-5:], "best_speed": track.get("best_speed"),
+           "tests": track.get("tests", [])[-15:],
            "profile": None, "drawing": None}
     if lay:
         dd = heading_changes(lay["up"])

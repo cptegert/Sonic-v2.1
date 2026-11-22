@@ -53,6 +53,18 @@ New board: add `--robot sonic` (and `--erase` for a used ESP32).
   (`Shadow-log` / `Sonic-X-log` / `Knuckles-log`, password `sonicx123`), then run
   `tools\log.bat sonic` (or `shadow` / `knuckles`).
 
+`roblog` without a name waits until any robot's Wi-Fi is in reach (switch the robot
+on) and then starts. Recording is always on while connected.
+
+**Test drive** (top of the dashboard): choose "I start the robot" (app / start button)
+or "The laptop starts it", set the duration, press **Start test**. It ends by itself
+when the time is up (the robot is stopped) or with **End test**; you get a summary
+(laps, best / median, trouble, wall margin) and it is kept per track.
+
+**Competition:** the robot keeps a **diary** in its own memory (every drive, lap
+times and trouble, speed map, marks) - no laptop needed. After a round: connect,
+robot stopped, "Robot's diary" -> **Read**.
+
 The dashboard shows everything live and records to `crashlogs/`:
 - **Marks:** buttons for wrong way / right way again / tipped / stuck / crash … and
   your own notes. They are saved with the exact time and sent to the robot. While

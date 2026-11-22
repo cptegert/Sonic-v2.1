@@ -5,7 +5,8 @@
     "name": "Sonic-X",
     "ssid": "Sonic-X-log",
     "macs": [
-      "94:3c:c6:cd:d7:89"
+      "94:3c:c6:cd:d7:89",
+      "94:3c:c6:cd:d7:88"
     ]
   },
   "shadow": {
@@ -14,7 +15,14 @@
     "ssid": "Shadow-log",
     "macs": [
       "94:3c:c6:cd:b9:e4"
-    ]
+    ],
+    "turn_calib": {
+      "gain": 21.84504,
+      "offset": -0.03927,
+      "quality": 0.922,
+      "track": "default",
+      "when": "2026-11-22 15:57"
+    }
   },
   "knuckles": {
     "env": "robot",
