@@ -147,6 +147,12 @@ def run_profile(rows):
             p[k].append(round(len(x[k]) / nl, 3))
     p["laps"] = nl
     p["lap_s"] = round(med, 3)
+    # seconds from driving off to the lap mark (only if recorded from the start)
+    first = next((b["t_ms"] for a, b in zip(rows, rows[1:]) if b["lap"] > a["lap"]), None)
+    if first and rows[0].get("loop", 999) < 40:
+        after = (first - med * 1000 - rows[0]["t_ms"]) / 1000
+        if 0 <= after < 40:
+            p["mark_after_s"] = round(after, 2)
     p["when"] = time.strftime("%Y-%m-%d %H:%M")
     return p
 
@@ -390,11 +396,120 @@ def chaikin(pts, it=2):
     return pts
 
 
-def layout_points(layout):
+# --------------------------------------------------------------------------- tile tracks
+# Square tiles on a grid: straight, 90 deg turn, ramp (straight with a slope; rot sets
+# which end is HIGH), bridge (raised straight; may sit across a straight = crossing).
+# Sides: 0 north (up on the screen), 1 east, 2 south, 3 west. rot = quarter turns clockwise.
+DX, DY = (0, 1, 0, -1), (-1, 0, 1, 0)
+TILE_BASE = {"straight": (0, 2), "ramp": (0, 2), "bridge": (0, 2), "turn": (2, 1)}
+SIDE_NAME = ("north", "east", "south", "west")
+
+
+def tile_sides(t):
+    a, b = TILE_BASE.get(t.get("type"), (0, 2))
+    r = int(t.get("rot", 0)) % 4
+    return (a + r) % 4, (b + r) % 4
+
+
+def trace_tiles(tiles, start=None):
+    """Follow the pieces from the start (robot placement: tile + driving direction).
+    Returns {points (tile units, y down), kinds per point, closed, error, tiles, start_frac}."""
+    cells = {}
+    for t in tiles or []:
+        if t.get("type") in TILE_BASE:
+            cells.setdefault((int(t["x"]), int(t["y"])), []).append(t)
+    if not cells:
+        return {"points": [], "closed": False, "error": "no pieces yet", "tiles": 0}
+    x0 = y0 = ent = None
+    if start and (int(start.get("x", -99)), int(start.get("y", -99))) in cells:
+        x0, y0 = int(start["x"]), int(start["y"])
+        for t in cells[(x0, y0)]:
+            sd = tile_sides(t)
+            if int(start.get("dir", -1)) in sd:
+                ent = sd[0] if sd[1] == int(start["dir"]) else sd[1]
+                break
+    if ent is None:
+        (x0, y0), ts = min(cells.items())
+        ent = tile_sides(ts[0])[0]
+    pts, kinds = [], []
+    x, y, e = x0, y0, ent
+    used = set()
+    for _ in range(600):
+        tile = next((t for t in cells.get((x, y), []) if e in tile_sides(t)), None)
+        if tile is None:
+            return {"points": pts, "kinds": kinds, "closed": False, "tiles": len(used),
+                    "error": f"track open: nothing connects at tile ({x},{y}) from the {SIDE_NAME[e]}"}
+        if (x, y, e) in used:
+            break
+        used.add((x, y, e))
+        sd = tile_sides(tile)
+        ex = sd[1] if sd[0] == e else sd[0]
+        cx, cy = x + 0.5, y + 0.5
+        a = (cx + 0.5 * DX[e], cy + 0.5 * DY[e])
+        b = (cx + 0.5 * DX[ex], cy + 0.5 * DY[ex])
+        kind = None
+        if tile["type"] == "ramp":
+            kind = "up" if ex == tile_sides(tile)[0] else "down"   # first side = high end
+        elif tile["type"] == "bridge":
+            kind = "bridge"
+        if (e + 2) % 4 == ex:                     # straight through
+            seg = [(a[0] + (b[0] - a[0]) * k / 6, a[1] + (b[1] - a[1]) * k / 6) for k in range(6)]
+        else:                                     # quarter circle around the shared corner
+            ccx, ccy = cx + 0.5 * (DX[e] + DX[ex]), cy + 0.5 * (DY[e] + DY[ex])
+            a0 = math.atan2(a[1] - ccy, a[0] - ccx)
+            a1 = math.atan2(b[1] - ccy, b[0] - ccx)
+            d = math.atan2(math.sin(a1 - a0), math.cos(a1 - a0))
+            seg = [(ccx + 0.5 * math.cos(a0 + d * k / 6), ccy + 0.5 * math.sin(a0 + d * k / 6)) for k in range(6)]
+        pts += seg
+        kinds += [kind] * len(seg)
+        x, y, e = x + DX[ex], y + DY[ex], (ex + 2) % 4
+        if (x, y) == (x0, y0) and e == ent:
+            n = len(used)
+            return {"points": pts, "kinds": kinds, "closed": True, "error": None, "tiles": n,
+                    "start_frac": 0.5 / n}       # robot stands in the middle of the first tile
+    return {"points": pts, "kinds": kinds, "closed": False, "tiles": len(used), "error": "track does not close"}
+
+
+def tile_hills(pts, kinds):
+    """Runs of up / bridge / down -> [[from, to, kind]] as fractions of the track length."""
+    n = len(pts)
+    seg = [math.hypot(pts[(i + 1) % n][0] - pts[i][0], pts[(i + 1) % n][1] - pts[i][1]) for i in range(n)]
+    tot = sum(seg) or 1
+    cum = [0.0]
+    for d in seg:
+        cum.append(cum[-1] + d / tot)
+    out, i = [], 0
+    while i < n:
+        if kinds[i]:
+            j = i
+            while j < n and kinds[j] == kinds[i]:
+                j += 1
+            out.append([round(cum[i], 4), round(cum[j], 4), kinds[i]])
+            i = j
+        else:
+            i += 1
+    return out
+
+
+def layout_points(layout, start=None):
     """Your track as M points (normalized, y down) + hill spans. Drawn points are
     smoothed a little (corners become curves, like a real track)."""
     if not layout:
         return None
+    extra = {}
+    if layout.get("tiles"):
+        tr = trace_tiles(layout["tiles"], start or layout.get("placement"))
+        if not tr["closed"]:
+            return None
+        pts, hills = tr["points"], tile_hills(tr["points"], tr["kinds"])
+        R = resample_closed(pts, N)          # tile units are y-down like a drawing
+        seg = [math.hypot(pts[(i + 1) % len(pts)][0] - pts[i][0], pts[(i + 1) % len(pts)][1] - pts[i][1])
+               for i in range(len(pts))]
+        first_tile = sum(seg[:6])            # 6 points per tile: robot in the middle of the first one
+        extra = {"raw": [[round(x, 3), round(-y, 3)] for x, y in R],     # resampled, tile units, y down
+                 "start_frac": 0.5 * first_tile / sum(seg), "tiles": tr["tiles"],
+                 "length_tiles": round(sum(seg), 2)}
+        return dict({"xy": normalize(R), "up": R, "hills": hills}, **extra)
     if layout.get("text"):
         d = parse_description(layout["text"])
         if not d:
@@ -479,7 +594,7 @@ def _pearson(a, b):
     return sum((x - ma) * (y - mb) for x, y in zip(a, b)) / (sa * sb)
 
 
-def match(p, lay, geom=None):
+def match(p, lay, geom=None, prior=None):
     """Place every robot bin on your track. Returns {quality, reverse, shift, bin_to_xy,
     bin_to_frac, draw_bin} or None."""
     if not p or not lay:
@@ -489,12 +604,26 @@ def match(p, lay, geom=None):
     rs = smooth(rob, 3)
     up = lay["up"]
     best = None
-    for rev in (False, True):
-        u = list(reversed(up)) if rev else up
-        dd = smooth(heading_changes(u), 3)
-        s, c = _corr_shift(rs, dd)            # dd rolled by s lines up with the robot
-        if best is None or c > best[0]:
-            best = (c, rev, s, dd)
+    m0 = len(up)
+    if prior is not None:
+        # you said where the robot stood and which way it drove: the track is traced in
+        # that direction from there, and the lap mark is about mark_frac further on
+        dd = smooth(heading_changes(up), 3)
+        want = prior["mark_frac"] * m0
+        for s_ in range(m0):
+            off = abs(((-s_) % m0) - want)
+            if min(off, m0 - off) > prior.get("window", 0.15) * m0:
+                continue
+            c_ = _pearson(rs, _roll(dd, s_))
+            if best is None or c_ > best[0]:
+                best = (c_, False, s_, dd)
+    if best is None:
+        for rev in (False, True):
+            u = list(reversed(up)) if rev else up
+            dd = smooth(heading_changes(u), 3)
+            s, c = _corr_shift(rs, dd)            # dd rolled by s lines up with the robot
+            if best is None or c > best[0]:
+                best = (c, rev, s, dd)
     c, rev, s, dd = best
     ddr = _roll(dd, s)
     mp = dtw_path(rs, ddr, band=max(3, N // 10))          # robot distance bin -> drawing bin
@@ -532,6 +661,7 @@ def match(p, lay, geom=None):
         elif draw_bin[k] is not None:
             last = draw_bin[k]
     return {"quality": round(max(0.0, q), 3), "reverse": rev, "shift": s, "calib": calib,
+            "used_start": prior is not None,
             "bin_to_draw": bin_to_draw, "draw_bin": draw_bin}
 
 
@@ -551,7 +681,7 @@ def parts_table(p, dth, hills_bins=None):
             "rev": round(100 * max(p["rev"][i] for i in b)),
             "smf": round(min(p["smf"][i] for i in b), 2),
             "width": round(sum(p["left"][i] + p["right"][i] for i in b) / per),
-            "hill": bool(hills_bins and any(hills_bins[i] for i in b)),
+            "hill": next((hills_bins[i] for i in b if hills_bins and hills_bins[i]), None),
         })
     return rows
 
@@ -563,22 +693,32 @@ def analyse(track, robot, geom=None, live_profile=None, live_key=None, calib=Non
         runs = [(k, v) for k, v in runs if k != live_key] + [(live_key, dict(live_profile, robot=robot))]
     runs.sort(key=lambda kv: kv[1].get("when", ""), reverse=True)
     p = combine([v for _, v in runs])
-    lay = layout_points(track.get("layout"))
+    layout = track.get("layout")
+    newest = runs[0][1] if runs else {}
+    prior, start = None, None
+    if layout and layout.get("tiles") and newest.get("start"):
+        start = newest["start"]               # where you put the robot for the newest drive
+    lay = layout_points(layout, start)
+    if lay and start and lay.get("start_frac") is not None and newest.get("mark_after_s") is not None:
+        prior = {"mark_frac": (lay["start_frac"] + newest["mark_after_s"] / newest["lap_s"]) % 1.0}
     res = {"name": track["name"], "notes": track.get("notes", ""), "layout": track.get("layout"),
            "speedtests": track.get("speedtests", [])[-5:], "best_speed": track.get("best_speed"),
            "profile": None, "drawing": None}
     if lay:
         dd = heading_changes(lay["up"])
-        res["drawing"] = {"xy": lay["xy"], "hills": lay["hills"], "turns": turns(dd)}
+        res["drawing"] = {"xy": lay["xy"], "hills": lay["hills"], "turns": turns(dd),
+                          "raw": lay.get("raw"), "tiles": lay.get("tiles"), "length_tiles": lay.get("length_tiles"),
+                          "start": start or (layout or {}).get("placement")}
     if not p:
         return res
-    m = match(p, lay, geom) if lay else None
+    m = match(p, lay, geom, prior) if lay else None
     if m and m["calib"] and m["quality"] >= CALIB_MIN_QUALITY and p["laps"] >= CALIB_MIN_LAPS:
         calib = m["calib"]                    # this track calibrates the robot right now
     dth, ds, calibrated = dtheta_profile(p, geom, calib)
     hills_bins = None
     if m and lay["hills"]:
-        hills_bins = [any(a <= (m["bin_to_draw"][i] / N) <= b for a, b in lay["hills"]) for i in range(N)]
+        hills_bins = [next((h[2] if len(h) > 2 else "hill" for h in lay["hills"]
+                            if h[0] <= m["bin_to_draw"][i] / N <= h[1]), None) for i in range(N)]
     res["profile"] = {
         "laps": p["laps"], "runs": p["runs"], "lap_s": p["lap_s"],
         "speed": p["speed"], "near": p["near"], "lock": p["lock"], "rev": p["rev"], "smf": p["smf"],

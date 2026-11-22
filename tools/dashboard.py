@@ -203,6 +203,7 @@ class Link:
         self.run = run
         self.header = header.split(",")
         self.csv_path = time.strftime(f"crashlogs/run_%Y-%m-%d_%H%M%S_r{run}.csv")
+        self.run_started = time.time()
         self.csv = open(self.csv_path, "w", buffering=1)
         self.csv.write(header + "\n")
         self.last_t = None
@@ -453,6 +454,8 @@ class App:
         self.live_key = None
         self.speedtest = SpeedTest(self)
         self.robot_track_seen = None
+        self.placement = None       # where you put the robot for the NEXT drive (tile + direction)
+        self.run_start = {}         # run file -> placement used for that drive
         threading.Thread(target=self._analysis_loop, daemon=True).start()
 
     def geom(self):
@@ -479,6 +482,13 @@ class App:
                 self.robot_track_seen = rt
                 self.set_track(rt)
             ver = self.link.rows_ver
+            key = self.link.csv_path
+            if key and key not in self.run_start:      # a new drive started
+                self.run_start[key] = self.placement
+                if self.placement:
+                    self.link.event(f"# drive starts where you placed the robot: tile ({self.placement['x']},"
+                                    f"{self.placement['y']}) facing {tm.SIDE_NAME[self.placement['dir']]}")
+                self.placement = None                 # used up: mark it again for the next drive
             try:
                 if ver != last_ver:
                     last_ver = ver
@@ -489,6 +499,8 @@ class App:
                         p = tm.run_profile(rows)
                         if p:
                             p["robot"] = self.robot
+                            if self.run_start.get(key):
+                                p["start"] = {k: self.run_start[key][k] for k in ("x", "y", "dir")}
                             self.live_profile, self.live_key = p, os.path.basename(key)
                             with self.track_lock:
                                 t = tm.load_track(self.track)
@@ -561,7 +573,7 @@ class App:
             "recording": {"path": L.csv_path, "rows": rows_n}, "log_path": L.log_path,
             "pos": self.live_position(), "analysis_ver": self.analysis_ver,
             "speedtest": self.speedtest.to_json(), "tracks": tm.list_tracks(),
-            "geometry": self.geom() or {}, "calib": self.calib(),
+            "geometry": self.geom() or {}, "calib": self.calib(), "placement": self.placement,
         }
 
 
@@ -652,11 +664,31 @@ class Handler(BaseHTTPRequestHandler):
                 tm.save_track(t)
             APP.analysis_dirty = True
             return {"ok": True}
+        if path == "/api/placement":
+            if d.get("clear"):
+                APP.placement = None
+                return {"ok": True}
+            pl = {"x": int(d["x"]), "y": int(d["y"]), "dir": int(d["dir"]) % 4, "when": time.time()}
+            APP.placement = pl
+            side = tm.SIDE_NAME[pl["dir"]]
+            L.mark(f"robot placed at tile ({pl['x']},{pl['y']}) facing {side}", f"mark placed {pl['x']},{pl['y']} {side}")
+            with APP.track_lock:
+                t = tm.load_track(APP.track)
+                if t.get("layout") and t["layout"].get("tiles"):
+                    t["layout"]["placement"] = {k: pl[k] for k in ("x", "y", "dir")}
+                    tm.save_track(t)
+            return {"ok": True}
         if path == "/api/layout/preview":
-            lay = tm.layout_points(d.get("layout"))
+            lay_in = d.get("layout") or {}
+            if lay_in.get("tiles"):
+                tr = tm.trace_tiles(lay_in["tiles"], lay_in.get("placement"))
+                if not tr["closed"]:
+                    return {"ok": False, "error": tr["error"], "tiles": tr["tiles"]}
+            lay = tm.layout_points(lay_in)
             if not lay:
                 return {"ok": False}
-            return {"ok": True, "xy": lay["xy"], "hills": lay["hills"], "turns": tm.turns(tm.heading_changes(lay["up"]))}
+            return {"ok": True, "xy": lay["xy"], "hills": lay["hills"], "turns": tm.turns(tm.heading_changes(lay["up"])),
+                    "tiles": lay.get("tiles"), "length_tiles": lay.get("length_tiles")}
         if path == "/api/robot/geometry":
             g = {k: float(d[k]) for k in ("wheelbase_cm", "turn_radius_cm", "length_cm", "width_cm")
                  if d.get(k) not in (None, "")}

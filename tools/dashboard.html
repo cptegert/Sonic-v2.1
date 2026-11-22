@@ -4,9 +4,11 @@
 <title>Robot dashboard</title>
 <style>
 :root{--bg:#f6f6f3;--card:#fff;--fg:#1d1d1b;--muted:#6b6b66;--line:#dcdcd6;--soft:#efefea;
---ok:#1f8a4c;--warn:#c77700;--bad:#c62828;--acc:#2f5fd0;--hill:rgba(150,95,40,.28)}
+--ok:#1f8a4c;--warn:#c77700;--bad:#c62828;--acc:#2f5fd0;--hill:rgba(150,95,40,.28);
+--road:#c9c9c2;--road2:#8f8f88;--up:rgba(200,110,30,.35);--down:rgba(40,140,170,.35);--bridge:rgba(120,80,170,.35)}
 @media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1d1d1c;--fg:#ececea;--muted:#9a9a95;--line:#353532;--soft:#262624;
---ok:#3fbf73;--warn:#e69a2e;--bad:#ef5350;--acc:#6f95ff;--hill:rgba(200,140,70,.30)}}
+--ok:#3fbf73;--warn:#e69a2e;--bad:#ef5350;--acc:#6f95ff;--hill:rgba(200,140,70,.30);
+--road:#4a4a46;--road2:#77776f;--up:rgba(230,140,50,.40);--down:rgba(70,170,200,.40);--bridge:rgba(160,120,220,.40)}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
 header{position:sticky;top:0;z-index:5;background:var(--card);border-bottom:1px solid var(--line);padding:8px 16px;display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
@@ -52,6 +54,8 @@ textarea{width:100%;min-height:60px}
 input[type=number]{width:80px}
 .bar{height:10px;background:var(--acc);border-radius:3px}
 .err{color:var(--bad)}
+.palette button{min-width:74px}
+.palette button svg{width:34px;height:34px;display:block;margin:0 auto 2px}
 </style></head><body>
 <header>
   <h1 id="rname">Robot</h1>
@@ -97,6 +101,10 @@ input[type=number]{width:80px}
         <button data-layer="speed" class="on">Speed</button><button data-layer="trouble">Trouble</button><button data-layer="map">Speed map</button>
       </div>
       <div class="trackbox"><svg id="trackSvg" viewBox="0 0 1000 700"></svg></div>
+      <div class="row" id="placeRow" style="margin-top:6px">
+        <button id="placeBtn" title="Click the tile where you put the robot; click again to turn it">📍 Place robot for the next drive</button>
+        <span id="placeInfo" class="small"></span>
+      </div>
       <div class="legend" id="legend"></div>
       <div id="matchInfo" class="small" style="margin-top:6px"></div>
       <div style="margin-top:6px"><span class="muted small">Robot sees:</span> <span id="robotTurns"></span></div>
@@ -105,9 +113,21 @@ input[type=number]{width:80px}
     <div id="viewRing" class="hide"><div class="trackbox"><svg id="ringSvg" viewBox="0 0 640 600"></svg></div></div>
     <div id="viewEdit" class="hide">
       <div class="row" style="margin:8px 0">
-        <button data-emode="draw" class="on">Draw</button><button data-emode="text">Describe</button>
+        <button data-emode="tiles" class="on">Tiles</button><button data-emode="draw">Draw freely</button><button data-emode="text">Describe</button>
       </div>
-      <div id="eDraw">
+      <div id="eTiles">
+        <div class="small muted">Pick a piece, click a square to put it there. Click it again (or right-click) to turn it. <b>Ramp</b>: the arrow points UP the slope. <b>Bridge</b> on a straight = crossing. <b>Robot</b>: click the tile where the robot starts, click again to turn it. The line must close.</div>
+        <div class="row palette" style="margin:6px 0">
+          <button data-tool="straight" class="on"></button><button data-tool="turn"></button><button data-tool="ramp"></button><button data-tool="bridge"></button>
+          <button data-tool="robot"></button><button data-tool="erase"></button>
+          <button id="tRot" title="R">↻ Turn piece</button>
+          <label class="small">tile size <input id="tCm" type="number" style="width:70px" placeholder="cm"> cm</label>
+          <button id="tClear">Clear all</button>
+        </div>
+        <div class="trackbox"><svg id="tileSvg" viewBox="0 0 960 600" style="touch-action:none"></svg></div>
+        <div id="tStatus" class="small" style="margin-top:4px"></div>
+      </div>
+      <div id="eDraw" class="hide">
         <div class="small muted">Click to add corner points in driving order (any start), drag to move, double-click a point to delete it. The line closes by itself and corners are rounded. <b>Hill</b>: press it, then click the first and the last point of the hill.</div>
         <div class="row" style="margin:6px 0"><button id="eUndo">Undo</button><button id="eClear">Clear</button><button id="eHill">Hill</button><button id="eHillClear">Remove hills</button><span id="eHillMsg" class="small muted"></span></div>
         <div class="trackbox"><svg id="editSvg" viewBox="0 0 1000 700" style="cursor:crosshair;touch-action:none"></svg></div>
@@ -278,6 +298,35 @@ function renderLaps() {
     laps.slice().reverse().map(l => `<tr><td>${l.lap}</td><td>${l.s.toFixed(2)} s</td><td>${l.rev || ''}</td><td>${l.trap || ''}</td><td>${l.notmov || ''}</td><td>${l.blind || ''}</td><td>${l.minwall} cm</td><td>${l.lock}%</td><td>${l.spd}</td></tr>`).join('');
 }
 
+// ---------------------------------------------------------------- tiles
+const DX = [0, 1, 0, -1], DY = [-1, 0, 1, 0], SIDE = ['north', 'east', 'south', 'west'];
+const BASE = {straight: [0, 2], ramp: [0, 2], bridge: [0, 2], turn: [2, 1]};
+const sidesOf = t => BASE[t.type].map(a => (a + (t.rot || 0)) % 4);
+const hillName = h => !h ? '' : h === 'up' ? '⬈ up' : h === 'down' ? '⬊ down' : h === 'bridge' ? '▬ bridge' : '⛰';
+const HILLCOL = {up: 'var(--up)', down: 'var(--down)', bridge: 'var(--bridge)'};
+function tileSvg(t, X, Y, C, faint) {   // one piece, top-left X,Y, size C
+  const h = C / 2, w = C * 0.56, op = faint ? ' opacity=".55"' : '';
+  let g = '';
+  if (t.type === 'turn') g = `<path d="M0,${h} A${h},${h} 0 0 1 ${h},0" stroke="var(--road)" stroke-width="${w}" fill="none"/><path d="M0,${h} A${h},${h} 0 0 1 ${h},0" stroke="var(--road2)" stroke-width="1.5" stroke-dasharray="5 5" fill="none"/>`;
+  else {
+    g = `<rect x="${-w / 2}" y="${-h}" width="${w}" height="${C}" fill="var(--road)"/><line x1="0" y1="${-h}" x2="0" y2="${h}" stroke="var(--road2)" stroke-width="1.5" stroke-dasharray="5 5"/>`;
+    if (t.type === 'ramp') g += `<rect x="${-w / 2}" y="${-h}" width="${w}" height="${C}" fill="var(--up)"/><polygon points="0,${-h + 4} ${-C * .17},${-h + C * .3} ${C * .17},${-h + C * .3}" fill="var(--fg)"/><text x="0" y="${C * .3}" text-anchor="middle" font-size="${C * .2}" fill="var(--fg)">up</text>`;
+    if (t.type === 'bridge') g += `<rect x="${-w / 2}" y="${-h}" width="${w}" height="${C}" fill="var(--bridge)"/><line x1="${-w / 2}" y1="${-h}" x2="${-w / 2}" y2="${h}" stroke="var(--fg)" stroke-width="3"/><line x1="${w / 2}" y1="${-h}" x2="${w / 2}" y2="${h}" stroke="var(--fg)" stroke-width="3"/>`;
+  }
+  return `<g transform="translate(${X + h},${Y + h}) rotate(${(t.rot || 0) * 90})"${op}>${g}</g>`;
+}
+function robotSvg(pl, X, Y, C, col = 'var(--acc)') {
+  const h = C / 2;
+  return `<g transform="translate(${X + h},${Y + h}) rotate(${pl.dir * 90})"><circle r="${C * .3}" fill="${col}" opacity=".25"/><polygon points="0,${-C * .32} ${-C * .2},${C * .2} 0,${C * .08} ${C * .2},${C * .2}" fill="${col}"/></g>`;
+}
+function tileFrame(tiles, W, H, pad) {
+  const xs = tiles.map(t => t.x), ys = tiles.map(t => t.y);
+  const mnx = Math.min(...xs), mny = Math.min(...ys), w = Math.max(...xs) - mnx + 1, hh = Math.max(...ys) - mny + 1;
+  const C = Math.min((W - 2 * pad) / w, (H - 2 * pad) / hh);
+  return {C, mnx, mny, ox: (W - w * C) / 2, oy: (H - hh * C) / 2};
+}
+let placing = false;
+
 // ---------------------------------------------------------------- track drawing
 function speedCol(us) { const f = Math.max(0, Math.min(1, (us - 1550) / 300)); return `hsl(${220 - 220 * f},75%,50%)`; }
 function binColour(p, i) {
@@ -300,9 +349,34 @@ function drawMap() {
   $('#legend').textContent = LEG[layer];
   let out = '';
   const pos = S && S.pos != null ? Math.min(N - 1, Math.floor(S.pos * N)) : null;
-  if (useYours) {
+  const lay = A && A.layout;
+  $('#placeRow').classList.toggle('hide', !(lay && lay.tiles && lay.tiles.length));
+  if (lay && lay.tiles && lay.tiles.length) {
+    const pl = S && S.placement;
+    $('#placeBtn').classList.toggle('on', placing);
+    $('#placeInfo').innerHTML = placing ? '<b>click the tile where the robot stands (again = turn it)</b>' :
+      pl ? `next drive starts at tile (${pl.x},${pl.y}) facing ${SIDE[pl.dir]} ✓` : '<span class="muted">not set – place the robot before each drive (helps the matching)</span>';
+  }
+  if (useYours && dr.raw && lay && lay.tiles) {
+    const F = tileFrame(lay.tiles, 1000, 700, 40), C = F.C, px = ([x, y]) => [F.ox + (x - F.mnx) * C, F.oy + (y - F.mny) * C];
+    for (const t of lay.tiles) out += tileSvg(t, F.ox + (t.x - F.mnx) * C, F.oy + (t.y - F.mny) * C, C, true);
+    const P = dr.raw.map(px), M = P.length;
+    for (let j = 0; j < M; j++) {
+      const q = P[j], r = P[(j + 1) % M], bin = m && p ? m.draw_bin[j] : null;
+      out += `<line x1="${q[0].toFixed(1)}" y1="${q[1].toFixed(1)}" x2="${r[0].toFixed(1)}" y2="${r[1].toFixed(1)}" stroke="${bin != null ? binColour(p, bin) : 'var(--muted)'}" stroke-width="${C * .14}" stroke-linecap="round"/>`;
+    }
+    if (m && p) {
+      for (let k = 0; k < PARTS; k++) { const q = P[m.bin_to_draw[k * N / PARTS]]; out += `<text x="${q[0] + 8}" y="${q[1] - 8}" fill="var(--fg)" font-size="${Math.max(13, C * .22)}" font-weight="600">${k + 1}</text>`; }
+      const q0 = P[m.bin_to_draw[0]]; out += `<circle cx="${q0[0]}" cy="${q0[1]}" r="9" fill="var(--fg)"/>` + arrow(q0, P[m.bin_to_draw[3]]);
+      if (pos != null) { const q = P[m.bin_to_draw[pos]]; out += `<circle cx="${q[0]}" cy="${q[1]}" r="16" fill="none" stroke="var(--acc)" stroke-width="5"/><circle cx="${q[0]}" cy="${q[1]}" r="6" fill="var(--acc)"/>`; }
+    }
+    const pl = S && S.placement, last = dr.start;
+    if (pl) out += robotSvg(pl, F.ox + (pl.x - F.mnx) * C, F.oy + (pl.y - F.mny) * C, C);
+    else if (last) out += robotSvg(last, F.ox + (last.x - F.mnx) * C, F.oy + (last.y - F.mny) * C, C, 'var(--muted)');
+    svg.dataset.frame = JSON.stringify(F);
+  } else if (useYours) {
     const P = fit(dr.xy), M = P.length;
-    for (const [a, b] of dr.hills || []) for (let j = Math.floor(a * M); j < Math.ceil(b * M); j++) { const q = P[j % M], r = P[(j + 1) % M]; out += `<line x1="${q[0]}" y1="${q[1]}" x2="${r[0]}" y2="${r[1]}" stroke="var(--hill)" stroke-width="34" stroke-linecap="round"/>`; }
+    for (const [a, b, kd] of dr.hills || []) for (let j = Math.floor(a * M); j < Math.ceil(b * M); j++) { const q = P[j % M], r = P[(j + 1) % M]; out += `<line x1="${q[0]}" y1="${q[1]}" x2="${r[0]}" y2="${r[1]}" stroke="${HILLCOL[kd] || 'var(--hill)'}" stroke-width="34" stroke-linecap="round"/>`; }
     for (let j = 0; j < M; j++) {
       const q = P[j], r = P[(j + 1) % M], bin = m && p ? m.draw_bin[j] : null;
       out += `<line x1="${q[0].toFixed(1)}" y1="${q[1].toFixed(1)}" x2="${r[0].toFixed(1)}" y2="${r[1].toFixed(1)}" stroke="${bin != null ? binColour(p, bin) : 'var(--muted)'}" stroke-width="12" stroke-linecap="round"/>`;
@@ -341,12 +415,14 @@ function renderTrack() {
   let mi = '';
   if (m) {
     const q = Math.round(m.quality * 100);
-    mi = `<b>Match ${q}%</b> ${q >= 75 ? '– good' : q >= 55 ? '– so-so (check the drawing)' : '– poor: the drawing and the robot disagree'}; the robot drives your drawing ${m.reverse ? 'in the opposite direction to how you drew it' : 'in the direction you drew it'}. Dot = lap mark, arrow = driving direction, ring = robot now.`;
+    mi = `<b>Match ${q}%</b> ${q >= 75 ? '– good' : q >= 55 ? '– so-so (check the drawing)' : '– poor: the drawing and the robot disagree'}; ${m.used_start ? 'placed using where you put the robot' : `the robot drives your drawing ${m.reverse ? 'in the opposite direction to how you drew it' : 'in the direction you drew it'}`}. Dot = lap mark, arrow = driving direction, ring = robot now.`;
+    const dr = A.drawing, cm = A.layout && A.layout.tile_cm;
+    if (dr && dr.length_tiles && p) mi += cm ? ` Track ≈ ${(dr.length_tiles * cm / 100).toFixed(1)} m → average ${(dr.length_tiles * cm / 100 / p.lap_s).toFixed(2)} m/s.` : ` Track ≈ ${dr.length_tiles.toFixed(1)} tiles long (enter the tile size to get metres).`;
   } else if (A.drawing && !p) mi = 'Drawing saved – it gets matched once the robot has driven a few laps on this track.';
   $('#matchInfo').innerHTML = mi;
   // parts table
   $('#partsTable').innerHTML = p ? '<tr><th>part</th><th>turn</th><th>speed</th><th>near wall</th><th>full lock</th><th>reverse</th><th>map</th><th>width</th><th>hill</th></tr>' +
-    p.parts.map(r => `<tr><td>${r.part}</td><td>${r.turn}</td><td>${r.speed}</td><td>${r.near ? r.near + '%' : ''}</td><td>${r.lock ? r.lock + '%' : ''}</td><td>${r.rev ? r.rev + '%' : ''}</td><td>${r.smf < 0.995 ? r.smf.toFixed(2) : ''}</td><td>${r.width} cm</td><td>${r.hill ? '⛰' : ''}</td></tr>`).join('') : '';
+    p.parts.map(r => `<tr><td>${r.part}</td><td>${r.turn}</td><td>${r.speed}</td><td>${r.near ? r.near + '%' : ''}</td><td>${r.lock ? r.lock + '%' : ''}</td><td>${r.rev ? r.rev + '%' : ''}</td><td>${r.smf < 0.995 ? r.smf.toFixed(2) : ''}</td><td>${r.width} cm</td><td>${hillName(r.hill)}</td></tr>`).join('') : '';
   drawRing();
   // editor + notes (only when not being edited)
   if (!edit.dirty) loadEditor();
@@ -366,7 +442,7 @@ function drawRing() {
     const am = (a0 + a1) / 2, pr = p.parts[k], t = pr.turn;
     const g = t === 'straight' ? '|' : t.startsWith('left') ? '↰' : '↱';
     out += `<text x="${CX + (R - 44) * Math.cos(am)}" y="${CY + (R - 44) * Math.sin(am) + 7}" text-anchor="middle" font-size="${t === 'straight' ? 16 : 22}" fill="var(--fg)">${g}</text>`;
-    out += `<text x="${CX + (R + 28) * Math.cos(am)}" y="${CY + (R + 28) * Math.sin(am) + 5}" text-anchor="middle" font-size="13" fill="var(--muted)">${k + 1}${pr.hill ? '⛰' : ''}</text>`;
+    out += `<text x="${CX + (R + 28) * Math.cos(am)}" y="${CY + (R + 28) * Math.sin(am) + 5}" text-anchor="middle" font-size="13" fill="var(--muted)">${k + 1}${pr.hill ? ' ' + hillName(pr.hill) : ''}</text>`;
   }
   if (S && S.pos != null) { const a = -Math.PI / 2 + 2 * Math.PI * Math.min(S.pos, 0.999); out += `<circle cx="${CX + R * Math.cos(a)}" cy="${CY + R * Math.sin(a)}" r="18" fill="none" stroke="var(--acc)" stroke-width="5"/>`; }
   out += `<circle cx="${CX}" cy="${CY - R}" r="8" fill="var(--fg)"/><text x="${CX}" y="${CY}" text-anchor="middle" font-size="22" font-weight="600" fill="var(--fg)">${p.laps} laps</text><text x="${CX}" y="${CY + 24}" text-anchor="middle" font-size="14" fill="var(--muted)">lap ≈ ${p.lap_s.toFixed(2)} s · dot = lap mark</text>`;
@@ -374,22 +450,72 @@ function drawRing() {
 }
 
 // ---------------------------------------------------------------- editor
-const edit = {mode: 'draw', pts: [], hills: [], hillPick: null, drag: null, dirty: false, text: ''};
+const edit = {mode: 'tiles', pts: [], hills: [], hillPick: null, drag: null, dirty: false, text: '', tiles: [], placement: null, tool: 'straight', rot: 0};
 function loadEditor() {
   const lay = A && A.layout;
   edit.pts = lay && lay.points ? lay.points.map(p => [...p]) : [];
   edit.hills = lay && lay.hill_pts ? lay.hill_pts.map(h => [...h]) : [];
   edit.text = lay && lay.text || '';
-  edit.mode = lay && lay.text ? 'text' : 'draw';
+  edit.tiles = lay && lay.tiles ? lay.tiles.map(t => ({...t})) : [];
+  edit.placement = lay && lay.placement ? {...lay.placement} : null;
+  $('#tCm').value = lay && lay.tile_cm || '';
+  edit.mode = lay && lay.text ? 'text' : lay && lay.points && lay.points.length ? 'draw' : 'tiles';
   $('#eDesc').value = edit.text;
   setEMode(edit.mode, true); drawEditor(); preview();
 }
 function setEMode(m, quiet) {
   edit.mode = m; $$('[data-emode]').forEach(b => b.classList.toggle('on', b.dataset.emode === m));
-  $('#eDraw').classList.toggle('hide', m !== 'draw'); $('#eText').classList.toggle('hide', m !== 'text');
+  $('#eDraw').classList.toggle('hide', m !== 'draw'); $('#eText').classList.toggle('hide', m !== 'text'); $('#eTiles').classList.toggle('hide', m !== 'tiles');
+  if (m === 'tiles') drawTiles();
   if (!quiet) preview();
 }
-function layoutNow() { return edit.mode === 'text' ? {text: $('#eDesc').value} : {points: edit.pts, hill_pts: edit.hills}; }
+function layoutNow() {
+  if (edit.mode === 'tiles') return {tiles: edit.tiles, placement: edit.placement, tile_cm: +$('#tCm').value || null};
+  return edit.mode === 'text' ? {text: $('#eDesc').value} : {points: edit.pts, hill_pts: edit.hills};
+}
+const GW = 16, GH = 10, GC = 60;
+function drawTiles() {
+  let out = '';
+  for (let x = 0; x <= GW; x++) out += `<line x1="${x * GC}" y1="0" x2="${x * GC}" y2="${GH * GC}" stroke="var(--line)"/>`;
+  for (let y = 0; y <= GH; y++) out += `<line x1="0" y1="${y * GC}" x2="${GW * GC}" y2="${y * GC}" stroke="var(--line)"/>`;
+  for (const t of edit.tiles) out += tileSvg(t, t.x * GC, t.y * GC, GC);
+  if (edit.placement) out += robotSvg(edit.placement, edit.placement.x * GC, edit.placement.y * GC, GC);
+  $('#tileSvg').innerHTML = out;
+  // palette icons
+  $$('[data-tool]').forEach(b => {
+    const k = b.dataset.tool, r = edit.rot;
+    const icon = k === 'erase' ? '<text x="30" y="40" text-anchor="middle" font-size="30" fill="var(--fg)">✕</text>' : k === 'robot' ? robotSvg({dir: r}, 0, 0, 60) : tileSvg({type: k, rot: r}, 0, 0, 60);
+    b.innerHTML = `<svg viewBox="0 0 60 60">${icon}</svg>${k === 'turn' ? '90° turn' : k}`;
+    b.classList.toggle('on', k === edit.tool);
+  });
+}
+function tilesAt(x, y) { return edit.tiles.filter(t => t.x === x && t.y === y); }
+function tileClick(x, y, rotateOnly) {
+  const here = tilesAt(x, y), tool = edit.tool;
+  if (rotateOnly) { const t = here[here.length - 1]; if (t) t.rot = ((t.rot || 0) + 1) % 4; }
+  else if (tool === 'erase') { edit.tiles = edit.tiles.filter(t => !(t.x === x && t.y === y)); if (edit.placement && edit.placement.x === x && edit.placement.y === y) edit.placement = null; }
+  else if (tool === 'robot') {
+    if (!here.length) return;
+    const sides = [...new Set(here.flatMap(sidesOf))];
+    const pl = edit.placement;
+    let dir = sides[0];
+    if (pl && pl.x === x && pl.y === y) dir = sides[(sides.indexOf(pl.dir) + 1) % sides.length];
+    edit.placement = {x, y, dir};
+    api('/api/placement', edit.placement);       // also = where the robot stands for the next drive
+  } else if (here.length === 1 && here[0].type === tool) here[0].rot = ((here[0].rot || 0) + 1) % 4;
+  else if (tool === 'bridge' && here.length === 1 && ['straight', 'ramp'].includes(here[0].type)) edit.tiles.push({x, y, type: 'bridge', rot: ((here[0].rot || 0) + 1) % 4});
+  else { edit.tiles = edit.tiles.filter(t => !(t.x === x && t.y === y)); edit.tiles.push({x, y, type: tool, rot: edit.rot}); }
+  changed();
+}
+const tsvg = $('#tileSvg');
+const cellOf = ev => { const [px, py] = svgPt(tsvg, ev); return [Math.floor(px / 1000 * 960 / GC), Math.floor(py / 700 * 600 / GC)]; };
+tsvg.addEventListener('click', ev => { const [x, y] = cellOf(ev); if (x >= 0 && x < GW && y >= 0 && y < GH) tileClick(x, y, false); });
+tsvg.addEventListener('contextmenu', ev => { ev.preventDefault(); const [x, y] = cellOf(ev); tileClick(x, y, true); });
+$$('[data-tool]').forEach(b => b.onclick = () => { edit.tool = b.dataset.tool; drawTiles(); });
+$('#tRot').onclick = () => { edit.rot = (edit.rot + 1) % 4; drawTiles(); };
+document.addEventListener('keydown', e => { if ((e.key === 'r' || e.key === 'R') && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA' && edit.mode === 'tiles') { edit.rot = (edit.rot + 1) % 4; drawTiles(); } });
+$('#tClear').onclick = () => { if (confirm('Remove all pieces?')) { edit.tiles = []; edit.placement = null; changed(); } };
+$('#tCm').addEventListener('input', () => { edit.dirty = true; $('#eMsg').textContent = 'not saved'; });
 function drawEditor() {
   let out = '';
   for (let x = 0; x <= 1000; x += 50) out += `<line x1="${x}" y1="0" x2="${x}" y2="700" stroke="var(--line)" stroke-width="${x % 250 ? .5 : 1}"/>`;
@@ -408,6 +534,10 @@ function preview() {
   clearTimeout(prevT);
   prevT = setTimeout(async () => {
     const r = await api('/api/layout/preview', {layout: layoutNow()});
+    if (edit.mode === 'tiles') {
+      const n = edit.tiles.length, ups = edit.tiles.filter(t => t.type === 'ramp').length, br = edit.tiles.filter(t => t.type === 'bridge').length;
+      $('#tStatus').innerHTML = !n ? '<span class="muted">place the pieces of your track</span>' : r.ok ? `<span style="color:var(--ok)">✓ closed loop</span>: ${r.tiles} pieces driven, ${ups} ramp(s), ${br} bridge piece(s)${r.hills && r.hills.length ? ' – ' + r.hills.map(h => hillName(h[2])).join(' → ') : ''}${edit.placement ? '' : ' · <b>put the robot on its start tile</b> (Robot tool)'}` : `<span class="err">✗ ${esc(r.error || 'not a closed loop yet')}</span>`;
+    }
     $('#eTurns').innerHTML = r.ok ? turnChips(r.turns) + ` <span class="muted small">total ${r.turns.reduce((s, t) => s + (t.dir === 'L' ? t.deg : -t.deg), 0)}°</span>` : '<span class="muted small">–</span>';
     if (edit.mode === 'text') {
       let out = '';
@@ -431,7 +561,7 @@ ed.addEventListener('pointerdown', ev => {
 ed.addEventListener('pointermove', ev => { if (edit.drag !== null) { edit.pts[edit.drag] = svgPt(ed, ev); drawEditor(); } });
 ed.addEventListener('pointerup', () => { if (edit.drag !== null) { edit.drag = null; changed(); } });
 ed.addEventListener('dblclick', ev => { const t = ev.target.closest('circle'); if (!t) return; const i = +t.dataset.i; edit.pts.splice(i, 1); edit.hills = edit.hills.filter(h => h[0] !== i && h[1] !== i).map(h => h.map(x => x > i ? x - 1 : x)); changed(); });
-function changed() { edit.dirty = true; drawEditor(); preview(); $('#eMsg').textContent = 'not saved'; }
+function changed() { edit.dirty = true; if (edit.mode === 'tiles') drawTiles(); else drawEditor(); preview(); $('#eMsg').textContent = 'not saved'; }
 $('#eUndo').onclick = () => { edit.pts.pop(); edit.hills = edit.hills.filter(h => h[0] < edit.pts.length && h[1] < edit.pts.length); changed(); };
 $('#eClear').onclick = () => { if (confirm('Clear the drawing?')) { edit.pts = []; edit.hills = []; changed(); } };
 $('#eHill').onclick = () => { $('#eHill').classList.toggle('on'); edit.hillPick = null; $('#eHillMsg').textContent = $('#eHill').classList.contains('on') ? 'click the first point of the hill' : ''; };
@@ -441,6 +571,7 @@ $$('[data-emode]').forEach(b => b.onclick = () => setEMode(b.dataset.emode));
 $('#eSave').onclick = async () => {
   const lay = layoutNow();
   if (edit.mode === 'draw' && edit.pts.length < 3) { $('#eMsg').textContent = 'at least 3 points'; return; }
+  if (edit.mode === 'tiles' && edit.tiles.length < 4) { $('#eMsg').textContent = 'place the pieces first'; return; }
   const r = await api('/api/track/save', {layout: lay});
   edit.dirty = false; $('#eMsg').textContent = r.ok ? 'saved – matching with the robot data…' : (r.error || 'failed');
   shapeView = 'yours'; store.set('shape', 'yours');
@@ -490,7 +621,7 @@ $$('[data-shape]').forEach(b => b.onclick = () => { shapeView = b.dataset.shape;
 $$('[data-view]').forEach(b => b.onclick = () => {
   $$('[data-view]').forEach(x => x.classList.toggle('on', x === b));
   $('#viewMap').classList.toggle('hide', b.dataset.view !== 'map'); $('#viewRing').classList.toggle('hide', b.dataset.view !== 'ring'); $('#viewEdit').classList.toggle('hide', b.dataset.view !== 'edit');
-  if (b.dataset.view === 'edit') { drawEditor(); preview(); }
+  if (b.dataset.view === 'edit') { if (edit.mode === 'tiles') drawTiles(); else drawEditor(); preview(); }
 });
 $('#trackSel').onchange = async e => {
   const name = e.target.value;
@@ -504,5 +635,16 @@ $('#newTrackBtn').onclick = async () => {
   const r = await api('/api/track/select', {name});
   if (r.error) alert(r.error); else { edit.dirty = false; aVer = -1; alert(`Track “${name}”: ${r.robot}`); }
 };
+$('#placeBtn').onclick = () => { placing = !placing; drawMap(); };
+$('#trackSvg').addEventListener('click', ev => {
+  if (!placing || !A || !A.layout || !A.layout.tiles) return;
+  const F = JSON.parse($('#trackSvg').dataset.frame || 'null'); if (!F) return;
+  const [px, py] = svgPt($('#trackSvg'), ev), x = Math.floor((px - F.ox) / F.C) + F.mnx, y = Math.floor((py - F.oy) / F.C) + F.mny;
+  const here = A.layout.tiles.filter(t => t.x === x && t.y === y); if (!here.length) return;
+  const sides = [...new Set(here.flatMap(sidesOf))], pl = S.placement;
+  const dir = pl && pl.x === x && pl.y === y ? sides[(sides.indexOf(pl.dir) + 1) % sides.length] : sides[0];
+  S.placement = {x, y, dir}; api('/api/placement', {x, y, dir}); drawMap();
+});
+if (location.hash === '#edit') document.querySelector('[data-view="edit"]').click();
 poll();
 </script></body></html>

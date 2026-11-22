@@ -59,11 +59,14 @@ The dashboard shows everything live and records to `crashlogs/`:
   "wrong way" is on, the robot does not learn laps or its speed map.
 - **Track:** pick or create a named track at the top. The robot keeps a speed map
   and a lap mark per track (up to 6). A new track name = it learns from scratch.
-- **Draw / describe your track** (third tab): click the corners in driving order,
-  or type it, e.g. `S3 L90 S1 H1 L90 S3 L180 R90 L90` (S straight, L/R turn in
-  degrees, H hill). The robot's data is then placed on your drawing, and after
-  8+ laps with a good match the robot's steering is calibrated. That makes its own
-  shape guesses for new tracks better.
+- **Build your track from tiles** (third tab, "Tiles"): pick straight / 90° turn /
+  ramp (arrow = uphill) / bridge, click squares to place, click again to turn.
+  Put the robot on its start tile with the Robot tool and enter the tile size.
+  Before each drive press **Place robot for the next drive** on the map and click
+  the tile where the robot stands (click again to turn it). The robot's data is then
+  placed on your track. After 8+ laps with a good match the robot's steering is
+  calibrated, which makes its own guesses for new tracks better.
+  ("Draw freely" and "Describe", e.g. `S3 L90 S1 H1 L90`, also work.)
 - **Speed calibration:** drives several speeds (robot on the track, main switch OFF,
   phone app closed), scores laps per minute, and "Apply" saves the best speed on the
   robot. Pause waits after the current run (battery swap).
